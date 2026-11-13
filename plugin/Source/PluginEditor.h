@@ -41,6 +41,14 @@ private:
     juce::Slider curseurQuantite;
     juce::TextButton boutonEcoute;
 
+    // Compression (étape 4)
+    juce::String texteCompression() const;
+    juce::Label etatCompression, etiquetteCompQuantite;
+    juce::ToggleButton boutonCompression { "Compression" };
+    juce::Slider curseurCompQuantite;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> attacheCompression;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> attacheCompQuantite;
+
     // Démasquage dynamique (étape 3)
     juce::Label etatDemasquage, etiquetteDemQuantite, etiquettePriorite, etiquetteReactivite;
     juce::ToggleButton boutonDemasquage;

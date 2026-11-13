@@ -101,6 +101,8 @@ RogusProcessor::RogusProcessor()
     paramDemasquage  = parametres.getRawParameterValue (IdParam::demasquageActif);
     paramDemQuantite = parametres.getRawParameterValue (IdParam::demasquageQuantite);
     paramReactivite  = parametres.getRawParameterValue (IdParam::reactivite);
+    paramCompression  = parametres.getRawParameterValue (IdParam::compressionActive);
+    paramCompQuantite = parametres.getRawParameterValue (IdParam::compressionQuantite);
 
     // La zone « à garder lisible » de chaque rôle, traduite une fois en poids par bande.
     for (int i = 0; i < rogus::nbRoles; ++i)
@@ -172,6 +174,16 @@ juce::AudioProcessorValueTreeState::ParameterLayout RogusProcessor::creerParamet
         juce::NormalisableRange<float> (0.0f, 100.0f, 1.0f), 50.0f,
         juce::AudioParameterFloatAttributes().withLabel ("%")));
 
+    // --- Étape 4 : compression par rôle. Elle n'agit que sur une piste écoutée
+    //     avec cette version : un ancien projet sonne donc comme avant. ---
+    disposition.add (std::make_unique<juce::AudioParameterBool> (
+        juce::ParameterID { IdParam::compressionActive, 1 }, "Compression", true));
+
+    disposition.add (std::make_unique<juce::AudioParameterFloat> (
+        juce::ParameterID { IdParam::compressionQuantite, 1 }, rogus::fr ("Quantité de compression"),
+        juce::NormalisableRange<float> (0.0f, 100.0f, 1.0f), 50.0f,
+        juce::AudioParameterFloatAttributes().withLabel ("%")));
+
     return disposition;
 }
 
@@ -202,6 +214,11 @@ int RogusProcessor::cleConfig() const noexcept
 float RogusProcessor::lireQuantiteEffective() const noexcept
 {
     return paramActif->load() > 0.5f ? juce::jlimit (0.0f, 1.0f, paramQuantite->load() * 0.01f) : 0.0f;
+}
+
+float RogusProcessor::lireQuantiteCompression() const noexcept
+{
+    return paramCompression->load() > 0.5f ? juce::jlimit (0.0f, 1.0f, paramCompQuantite->load() * 0.01f) : 0.0f;
 }
 
 int RogusProcessor::lirePriorite() const noexcept
@@ -288,6 +305,20 @@ void RogusProcessor::mettreAJour()
                 nouvelleMesure.refDb[b] = (float) (10.0 * std::log10 (sommeRef[b] / nbTicksRef + 1.0e-20));
         }
 
+        // Histogramme des niveaux pour le compresseur : on passe des comptes aux parts du temps.
+        double totalHisto = 0.0;
+
+        for (auto compte : histoEcoute)
+            totalHisto += (double) compte;
+
+        if (nouvelleMesure.valide && totalHisto > 0.0)
+        {
+            nouvelleMesure.histoValide = true;
+
+            for (size_t k = 0; k < (size_t) rogus::nbHisto; ++k)
+                nouvelleMesure.histo[k] = (float) ((double) histoEcoute[k] / totalHisto);
+        }
+
         if (nouvelleMesure.valide)
         {
             {
@@ -342,6 +373,16 @@ void RogusProcessor::prepareToPlay (double frequenceEchantillonnage, int)
     banc = rogus::construireFiltres (lissee, frequenceEch);
     memoire = {};
     filtresNeutres = lireQuantiteEffective() <= 0.0f;
+
+    // Compresseur : on repart d'un état vierge. L'enveloppe de l'écoute retombe en 100 ms.
+    coefEnveloppeEcoute = std::exp (-1.0 / (frequenceEch * 0.1));
+    enveloppeEcoute = 0.0;
+    reductionComp = 0.0;
+    quantiteCompCalculee = -1.0f;
+    versionCompCalculee = -1;
+    rattrapageVise = rogus::rattrapageCompression (cible.compression, cible.histo, lireQuantiteCompression());
+    rattrapageLisse = rattrapageVise;
+    compNeutre = true;
 
     // Démasquage : on repart d'un état vierge.
     filtresAnalyse = rogus::construireFiltresAnalyse (frequenceEch);
@@ -520,7 +561,70 @@ void RogusProcessor::processBlock (juce::AudioBuffer<float>& tampon, juce::MidiB
                 filtrer (tampon.getWritePointer (canal), banc[(size_t) f], memoire[(size_t) canal][(size_t) f]);
     }
 
-    // --- Couche 2 : démasquage dynamique ---
+    // --- Couche 2 : compression ---
+    // Placée après la correction fixe (on compresse le son déjà nettoyé) et avant
+    // le démasquage (la place cédée aux autres pistes ne doit pas être « rattrapée »).
+    {
+        const auto& comp = cible.compression;
+        const float quantiteComp = comp.valide ? lireQuantiteCompression() : 0.0f;
+
+        // Le gain à rendre ne dépend que des réglages : on ne le recalcule que s'ils changent.
+        if (quantiteComp != quantiteCompCalculee || versionVue != versionCompCalculee)
+        {
+            rattrapageVise = rogus::rattrapageCompression (comp, cible.histo, quantiteComp);
+            quantiteCompCalculee = quantiteComp;
+            versionCompCalculee = versionVue;
+        }
+
+        rattrapageLisse += (rattrapageVise - rattrapageLisse) * part;
+
+        if (std::abs (rattrapageVise - rattrapageLisse) < 0.005f)
+            rattrapageLisse = rattrapageVise;
+
+        // À l'arrêt, une fois la réduction et le gain revenus à zéro : le son passe intact.
+        if (quantiteComp <= 0.0f && reductionComp > -0.01 && rattrapageLisse == 0.0f)
+        {
+            reductionComp = 0.0;
+            compNeutre = true;
+            reductionCompVue.store (0.0f);
+        }
+        else
+        {
+            compNeutre = false;
+
+            // Attaque : vitesse à laquelle la réduction s'installe ; relâchement : à laquelle elle repart.
+            const double coefAttaque = std::exp (-1.0 / (frequenceEch * 0.001 * juce::jmax (1.0f, comp.attaqueMs)));
+            const double coefRelache = std::exp (-1.0 / (frequenceEch * 0.001 * juce::jmax (1.0f, comp.relachementMs)));
+            float* gauche = tampon.getWritePointer (0);
+            float* droite = nbCanaux > 1 ? tampon.getWritePointer (1) : nullptr;
+            double somme = 0.0;
+
+            for (int n = 0; n < nbEch; ++n)
+            {
+                // Le plus fort des deux canaux commande : gauche et droite reçoivent
+                // le même gain, sinon l'image stéréo bougerait.
+                const float crete = droite != nullptr ? juce::jmax (std::abs (gauche[n]), std::abs (droite[n]))
+                                                      : std::abs (gauche[n]);
+                const float niveau = 20.0f * std::log10 (crete + 1.0e-9f);
+                const double visee = (double) (quantiteComp * rogus::gainCompression (comp, niveau));
+
+                reductionComp = visee + (reductionComp - visee) * (visee < reductionComp ? coefAttaque : coefRelache);
+                somme += reductionComp;
+
+                const float gain = (float) std::pow (10.0, (reductionComp + (double) rattrapageLisse) / 20.0);
+                gauche[n] *= gain;
+
+                if (droite != nullptr)
+                    droite[n] *= gain;
+            }
+
+            reductionCompVue.store ((float) (somme / nbEch));
+        }
+
+        rattrapageVu.store (rattrapageLisse);
+    }
+
+    // --- Couche 3 : démasquage dynamique ---
     // Les filtres ne sont recalculés que si la réduction a bougé de façon audible.
     float reductionMax = 0.0f, ecartMax = 0.0f;
 
@@ -802,6 +906,9 @@ void RogusProcessor::capturer (const juce::AudioBuffer<float>& tampon, int nbCan
         compteursBosses = {};
         sommeRef = {};
         nbTicksRef = 0;
+        histoEcoute = {};
+        enveloppeEcoute = 0.0;
+        compteurHisto = 0;
         std::fill (anneau.begin(), anneau.end(), 0.0f);
         indexEcriture = depuisDerniereTrame = echantillonsRecus = trames = 0;
         analysePrete.store (false);
@@ -824,6 +931,21 @@ void RogusProcessor::capturer (const juce::AudioBuffer<float>& tampon, int nbCan
         anneau[(size_t) indexEcriture] = 0.5f * (gauche[n] + droite[n]);
         indexEcriture = (indexEcriture + 1) & (rogus::tailleFft - 1);
         echantillonsRecus = juce::jmin (echantillonsRecus + 1, rogus::tailleFft);
+
+        // Pour le compresseur : l'enveloppe suit les crêtes du son (montée
+        // immédiate, descente en 100 ms), et on note 1 fois sur 32 à quel niveau
+        // elle se trouve. Sous -55 dBFS, c'est du silence : on ne le compte pas.
+        const double crete = juce::jmax (std::abs (gauche[n]), std::abs (droite[n]));
+        enveloppeEcoute = juce::jmax (crete, enveloppeEcoute * coefEnveloppeEcoute);
+
+        if (++compteurHisto >= 32)
+        {
+            compteurHisto = 0;
+            const float niveau = (float) (20.0 * std::log10 (enveloppeEcoute + 1.0e-9));
+
+            if (niveau > -55.0f)
+                ++histoEcoute[(size_t) rogus::caseDuNiveau (niveau)];
+        }
 
         if (++depuisDerniereTrame >= pasAnalyse && echantillonsRecus >= rogus::tailleFft)
         {
@@ -929,6 +1051,11 @@ void RogusProcessor::getStateInformation (juce::MemoryBlock& destination)
             for (int i = 0; i < rogus::nbBandes; ++i)
                 noeud.setProperty ("ref" + juce::String (i), m.refDb[(size_t) i], nullptr);
 
+        // Histogramme des niveaux pour le compresseur (étape 4), facultatif lui aussi.
+        if (m.histoValide)
+            for (int i = 0; i < rogus::nbHisto; ++i)
+                noeud.setProperty ("histo" + juce::String (i), m.histo[(size_t) i], nullptr);
+
         etat.appendChild (noeud, nullptr);
     }
 
@@ -970,6 +1097,14 @@ void RogusProcessor::setStateInformation (const void* donnees, int taille)
         if (m.refValide)
             for (int i = 0; i < rogus::nbBandes; ++i)
                 m.refDb[(size_t) i] = (float) noeud.getProperty ("ref" + juce::String (i), -100.0f);
+
+        // Une écoute faite avant l'étape 4 n'a pas d'histogramme : la piste
+        // n'est pas compressée tant qu'elle n'a pas été réécoutée.
+        m.histoValide = noeud.hasProperty ("histo0");
+
+        if (m.histoValide)
+            for (int i = 0; i < rogus::nbHisto; ++i)
+                m.histo[(size_t) i] = (float) noeud.getProperty ("histo" + juce::String (i), 0.0f);
     }
 
     // La mesure vit dans le plugin, pas dans l'arbre des paramètres.

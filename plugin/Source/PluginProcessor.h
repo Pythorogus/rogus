@@ -19,6 +19,9 @@ namespace IdParam
     inline const juce::String demasquageActif     { "demasquageActif" };
     inline const juce::String demasquageQuantite  { "demasquageQuantite" };
     inline const juce::String reactivite          { "reactivite" };
+    // Étape 4 : compression par rôle.
+    inline const juce::String compressionActive   { "compressionActive" };
+    inline const juce::String compressionQuantite { "compressionQuantite" };
 }
 
 // Le « moteur » du plugin. Étape 2 : EQ fixe par rôle.
@@ -79,6 +82,11 @@ public:
     float lireQuantiteEffective() const noexcept;      // 0 si la correction est désactivée
     double lireFrequenceEch() const noexcept  { return frequenceEchPartagee.load(); }
 
+    // --- Compression : ce que le compresseur est en train de faire ---
+    float lireQuantiteCompression() const noexcept;                              // 0 si désactivée
+    float lireReductionCompression() const noexcept  { return reductionCompVue.load(); }   // dB, <= 0, en ce moment
+    float lireRattrapage() const noexcept            { return rattrapageVu.load(); }       // dB rendus
+
     // --- Démasquage : ce que l'orchestration est en train de faire ---
     int lirePriorite() const noexcept;                 // priorité effective, de 1 à 5
     bool lireDemasquageActif() const noexcept;
@@ -125,6 +133,8 @@ private:
     std::atomic<float>* paramDemasquage = nullptr;
     std::atomic<float>* paramDemQuantite = nullptr;
     std::atomic<float>* paramReactivite = nullptr;
+    std::atomic<float>* paramCompression = nullptr;
+    std::atomic<float>* paramCompQuantite = nullptr;
 
     // --- Partagé entre fils ---
 
@@ -154,6 +164,7 @@ private:
     std::array<std::atomic<float>, rogus::nbBandes> reductionsVues {};
     std::atomic<int> roleDominant { -1 };
     std::atomic<bool> synchroHoteVue { false };
+    std::atomic<float> reductionCompVue { 0.0f }, rattrapageVu { 0.0f };
 
     // --- Réservé au fil audio ---
 
@@ -167,6 +178,17 @@ private:
     std::array<std::array<std::array<double, 2>, rogus::nbFiltres>, 2> memoire {};
     int versionVue = -1;
     bool filtresNeutres = true;
+
+    // Compresseur. Pendant une écoute : histogramme des niveaux de la piste.
+    std::array<std::uint32_t, rogus::nbHisto> histoEcoute {};
+    double enveloppeEcoute = 0.0, coefEnveloppeEcoute = 0.0;
+    int compteurHisto = 0;
+    // En marche : réduction en cours (dB, <= 0) et gain rendu.
+    double reductionComp = 0.0;
+    float rattrapageLisse = 0.0f, rattrapageVise = 0.0f;
+    float quantiteCompCalculee = -1.0f;
+    int versionCompCalculee = -1;
+    bool compNeutre = true;
 
     // Démasquage : mesure de l'énergie par bande (pour l'annoncer aux autres)...
     rogus::BancBandes filtresAnalyse;

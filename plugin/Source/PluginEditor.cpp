@@ -208,6 +208,17 @@ RogusEditor::RogusEditor (RogusProcessor& m)
     preparerCurseur (etiquetteDemQuantite, "Quantité", curseurDemQuantite);
     preparerCurseur (etiquetteReactivite, "Réactivité", curseurReactivite);
 
+    // --- Compression : resserre l'écart entre passages forts et faibles ---
+    etatCompression.setJustificationType (juce::Justification::centredLeft);
+    etatCompression.setColour (juce::Label::textColourId, couleurTexte);
+    etatCompression.setFont (juce::FontOptions (13.0f));
+    addAndMakeVisible (etatCompression);
+    addAndMakeVisible (boutonCompression);
+    preparerCurseur (etiquetteCompQuantite, "Quantité", curseurCompQuantite);
+
+    attacheCompression  = std::make_unique<AttacheBouton>  (moteur.parametres, IdParam::compressionActive, boutonCompression);
+    attacheCompQuantite = std::make_unique<AttacheCurseur> (moteur.parametres, IdParam::compressionQuantite, curseurCompQuantite);
+
     etiquettePriorite.setText (rogus::fr ("Priorité"), juce::dontSendNotification);
     etiquettePriorite.setJustificationType (juce::Justification::centredRight);
     addAndMakeVisible (etiquettePriorite);
@@ -219,7 +230,7 @@ RogusEditor::RogusEditor (RogusProcessor& m)
     attacheDemQuantite = std::make_unique<AttacheCurseur> (moteur.parametres, IdParam::demasquageQuantite, curseurDemQuantite);
     attacheReactivite  = std::make_unique<AttacheCurseur> (moteur.parametres, IdParam::reactivite, curseurReactivite);
 
-    setSize (640, 580);
+    setSize (640, 650);
     timerCallback();
     startTimerHz (15);     // rafraîchit la courbe et le texte d'état
 }
@@ -259,6 +270,24 @@ juce::String RogusEditor::texteEtat() const
     }
 
     return texte;
+}
+
+juce::String RogusEditor::texteCompression() const
+{
+    auto ecrireDb = [] (float db) { return juce::String (db, 1).replaceCharacter ('.', ','); };
+
+    if (moteur.lireQuantiteCompression() <= 0.0f)
+        return rogus::fr ("Compression à l'arrêt.");
+
+    const auto comp = moteur.lireCorrection().compression;
+
+    if (! comp.valide)
+        return rogus::fr ("Fais une écoute pour activer la compression (elle doit connaître la dynamique de la piste).");
+
+    // Ce que fait le compresseur en ce moment : de combien il baisse, et ce qu'il rend.
+    return rogus::fr ("Seuil ") + ecrireDb (comp.seuilDb) + " dB, ratio " + ecrireDb (comp.ratio)
+         + rogus::fr (" : baisse de ") + ecrireDb (-moteur.lireReductionCompression())
+         + rogus::fr (" dB en ce moment, volume rendu : +") + ecrireDb (moteur.lireRattrapage()) + " dB.";
 }
 
 juce::String RogusEditor::texteDemasquage() const
@@ -302,6 +331,7 @@ void RogusEditor::timerCallback()
 {
     etat.setText (texteEtat(), juce::dontSendNotification);
     etatDemasquage.setText (texteDemasquage(), juce::dontSendNotification);
+    etatCompression.setText (texteCompression(), juce::dontSendNotification);
     boutonEcoute.setButtonText (moteur.ecouteEnCours() ? rogus::fr ("Arrêter l'écoute")
                                                        : rogus::fr ("Écouter la piste"));
     courbe.repaint();
@@ -357,6 +387,17 @@ void RogusEditor::resized()
 
     zone.removeFromBottom (4);
     etatDemasquage.setBounds (zone.removeFromBottom (24));
+    zone.removeFromBottom (8);
+
+    // Au milieu : la compression (elle vient après la correction fixe dans le trajet du son).
+    auto ligneCompression = zone.removeFromBottom (34);
+    boutonCompression.setBounds (ligneCompression.removeFromLeft (140));
+    ligneCompression.removeFromRight (150 + 12);
+    etiquetteCompQuantite.setBounds (ligneCompression.removeFromLeft (70));
+    curseurCompQuantite.setBounds (ligneCompression);
+
+    zone.removeFromBottom (4);
+    etatCompression.setBounds (zone.removeFromBottom (24));
     zone.removeFromBottom (8);
 
     // Au-dessus : la ligne de la correction fixe et son texte d'état.

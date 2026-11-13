@@ -47,6 +47,15 @@ constexpr int tailleFft = 1 << ordreFft;
 
 using Equilibre = std::array<float, nbBandes>;      // dB par bande d'octave
 
+// Réglages du compresseur propres à un rôle (étape 4).
+struct ReglageCompression
+{
+    float ratio;                            // 3 = au-dessus du seuil, 3 dB en entrée n'en donnent plus qu'1
+    float attaqueMs;                        // temps avant d'agir : long, il laisse passer l'attaque des notes
+    float relachementMs;                    // temps pour relâcher
+    float profondeurDb;                     // le seuil est placé à cette distance sous les passages forts
+};
+
 struct Role
 {
     const char* nom;
@@ -55,6 +64,7 @@ struct Role
     Equilibre cible;                        // équilibre visé
     bool resonances;                        // chercher des résonances étroites ?
     int priorite;                           // priorité par défaut dans le mix, de 1 (fond) à 5 (devant)
+    ReglageCompression compression;
 };
 
 struct Source
@@ -81,6 +91,20 @@ juce::StringArray nomsSons();
 
 // --- Données -----------------------------------------------------------------
 
+// Histogramme des niveaux de la piste : la part du temps passée à chaque niveau
+// (48 cases de 1,5 dB, de -72 à 0 dBFS). Il dit à quel point la piste est
+// dynamique, donc où placer le seuil du compresseur et combien de volume rendre.
+constexpr int nbHisto = 48;
+constexpr float histoMinDb = -72.0f, histoPasDb = 1.5f;
+using Histogramme = std::array<float, nbHisto>;
+
+inline float niveauDeLaCase (int k) noexcept { return histoMinDb + ((float) k + 0.5f) * histoPasDb; }
+inline int caseDuNiveau (float db) noexcept
+{
+    const int k = (int) ((db - histoMinDb) / histoPasDb);
+    return k < 0 ? 0 : (k >= nbHisto ? nbHisto - 1 : k);
+}
+
 // Ce qu'une écoute a appris sur la piste. Indépendant du rôle : on peut
 // changer de rôle après coup sans réécouter.
 struct Mesure
@@ -97,6 +121,21 @@ struct Mesure
     // faites avant l'étape 3 : la piste ne peut alors pas demander de place.
     bool refValide = false;
     std::array<float, nbBandes> refDb {};
+
+    // Histogramme des niveaux (somme = 1), pour le compresseur. Absent des écoutes
+    // faites avant l'étape 4 : la piste n'est alors pas compressée.
+    bool histoValide = false;
+    Histogramme histo {};
+};
+
+// Le compresseur tel qu'il est réglé pour cette piste (à quantité 100 %).
+struct Compression
+{
+    bool valide = false;                         // faux sans histogramme : pas de compression
+    float seuilDb = 0.0f;
+    float ratio = 1.0f;
+    float attaqueMs = 10.0f;
+    float relachementMs = 100.0f;
 };
 
 // Les réglages de filtres. Calculés pour une quantité de 100 %.
@@ -120,6 +159,10 @@ struct Correction
     // Repère de niveau de la piste (copie de la mesure), pour le démasquage.
     bool refValide = false;
     std::array<float, nbBandes> refDb {};
+
+    // Compresseur (étape 4) et histogramme dont il a besoin pour rendre le volume.
+    Compression compression;
+    Histogramme histo {};
 };
 
 // Un filtre du 2e ordre, déjà normalisé (a0 = 1).
@@ -168,6 +211,27 @@ Mesure analyser (const std::vector<double>& spectre, double frequenceEch,
 // Mesure + rôle + source + son -> correction. Sans mesure valide : seulement
 // le coupe-bas, le plus haut de celui du rôle et de celui de la source.
 Correction calculerCorrection (const Role&, const Source&, const Son&, const Mesure&);
+
+// --- Compression (étape 4) -----------------------------------------------------
+// Un compresseur réduit l'écart entre les passages forts et les passages faibles
+// d'une piste : elle reste mieux à sa place dans le mix. Au-dessus d'un seuil,
+// il baisse le son selon un ratio ; puis il remonte le tout pour garder le volume.
+
+// Largeur du « genou » : la zone autour du seuil où la compression s'installe
+// en douceur au lieu de démarrer d'un coup.
+constexpr float genouDb = 6.0f;
+
+// Gain du compresseur (dB, <= 0) pour un niveau d'entrée donné, à quantité 100 %.
+float gainCompression (const Compression&, float niveauDb) noexcept;
+
+// Réglages du rôle + histogramme de la piste -> compresseur. Le seuil est posé
+// sous les passages forts de la piste (son 90e centile), pas à une valeur fixe :
+// une piste enregistrée bas est compressée comme une piste enregistrée fort.
+Compression calculerCompression (const ReglageCompression&, const Mesure&) noexcept;
+
+// Gain à rendre (dB) pour que la piste garde son énergie malgré la compression,
+// d'après son histogramme. Un simple gain fixe : il ne « pompe » pas.
+float rattrapageCompression (const Compression&, const Histogramme&, float quantite) noexcept;
 
 // --- Démasquage dynamique (étape 3) -------------------------------------------
 // Quand deux pistes jouent dans la même zone de fréquences, la moins prioritaire

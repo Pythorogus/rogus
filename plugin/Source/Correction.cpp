@@ -21,31 +21,37 @@ namespace
     // Le dernier nombre est la priorité par défaut (1 = fond, 5 = devant) : à
     // priorité égale personne ne cède. Le kick passe devant la basse dans le
     // grave (le « sidechain » classique), la voix devant le lead.
+    //
+    // Entre accolades à la fin : le compresseur du rôle (ratio, attaque en ms,
+    // relâchement en ms, profondeur du seuil en dB sous les passages forts).
+    // Voix et basse sont tenues de près (seuil profond) ; kick, snare et hits
+    // ont une attaque lente ou un seuil haut pour garder leur claquement.
+    // Comme les cibles : des points de départ, à régler à l'oreille.
     const std::array<Role, nbRoles> tableRoles
     {{
         // Lead : peu de grave (il laisse la place à la basse et à la rythmique),
         // l'essentiel entre 800 Hz et 3 kHz, là où la mélodie se détache.
-        { "Lead",       100.0f, 1000.0f,  4000.0f, { -14.0f,  -6.0f,  -2.0f,   0.0f,   0.0f,  -2.0f,  -8.0f }, true,  4 },
+        { "Lead",       100.0f, 1000.0f,  4000.0f, { -14.0f,  -6.0f,  -2.0f,   0.0f,   0.0f,  -2.0f,  -8.0f }, true,  4, { 3.0f, 15.0f, 150.0f, 6.0f } },
         // Rythmique : le corps (200 à 800 Hz) porte le morceau, les aigus restent en retrait.
-        { "Rythmique",   80.0f,  200.0f,  2000.0f, {  -8.0f,  -2.0f,   0.0f,  -1.0f,  -3.0f,  -6.0f, -12.0f }, true,  3 },
+        { "Rythmique",   80.0f,  200.0f,  2000.0f, {  -8.0f,  -2.0f,   0.0f,  -1.0f,  -3.0f,  -6.0f, -12.0f }, true,  3, { 2.5f, 20.0f, 150.0f, 5.0f } },
         // Arpège : entre les deux. Il doit rester net (attaque des notes) sans prendre le corps de la rythmique.
-        { "Arpège",      90.0f,  500.0f,  3500.0f, { -12.0f,  -4.0f,  -1.0f,   0.0f,  -1.0f,  -3.0f,  -9.0f }, true,  3 },
+        { "Arpège",      90.0f,  500.0f,  3500.0f, { -12.0f,  -4.0f,  -1.0f,   0.0f,  -1.0f,  -3.0f,  -9.0f }, true,  3, { 2.5f, 15.0f, 200.0f, 6.0f } },
         // Basse et kick : l'énergie est dans le grave et décroît régulièrement.
         // Pas de recherche de résonances : leur note fondamentale ressemble
         // à une résonance, et il ne faut surtout pas l'atténuer.
-        { "Basse",       30.0f,   40.0f,   250.0f, {   0.0f,  -3.0f,  -8.0f, -13.0f, -19.0f, -26.0f, -34.0f }, false, 4 },
-        { "Kick",        30.0f,   40.0f,   120.0f, {   0.0f,  -6.0f, -12.0f, -16.0f, -19.0f, -21.0f, -26.0f }, false, 5 },
+        { "Basse",       30.0f,   40.0f,   250.0f, {   0.0f,  -3.0f,  -8.0f, -13.0f, -19.0f, -26.0f, -34.0f }, false, 4, { 4.0f, 25.0f, 200.0f, 8.0f } },
+        { "Kick",        30.0f,   40.0f,   120.0f, {   0.0f,  -6.0f, -12.0f, -16.0f, -19.0f, -21.0f, -26.0f }, false, 5, { 4.0f, 30.0f, 100.0f, 4.0f } },
         // Snare : le corps vers 200 Hz et le claquement des timbres entre 2 et 5 kHz.
-        { "Snare",       80.0f,  150.0f,  5000.0f, { -12.0f,  -2.0f,  -5.0f,  -7.0f,  -6.0f,  -4.0f,  -6.0f }, true,  4 },
+        { "Snare",       80.0f,  150.0f,  5000.0f, { -12.0f,  -2.0f,  -5.0f,  -7.0f,  -6.0f,  -4.0f,  -6.0f }, true,  4, { 3.0f, 20.0f, 120.0f, 4.0f } },
         // Hits (percussions, cymbales, samples) : brillants, sans grave utile. Pas de
         // recherche de résonances : le timbre métallique d'une cymbale en est justement fait.
-        { "Hits",       150.0f, 3000.0f, 10000.0f, { -16.0f, -10.0f,  -8.0f,  -6.0f,  -4.0f,  -2.0f,  -3.0f }, false, 2 },
+        { "Hits",       150.0f, 3000.0f, 10000.0f, { -16.0f, -10.0f,  -8.0f,  -6.0f,  -4.0f,  -2.0f,  -3.0f }, false, 2, { 2.0f, 10.0f, 150.0f, 4.0f } },
         // Voix : le corps vers 200-400 Hz, l'intelligibilité entre 1 et 5 kHz.
-        { "Voix",        90.0f, 1000.0f,  5000.0f, { -12.0f,  -3.0f,   0.0f,  -1.0f,  -4.0f,  -7.0f, -11.0f }, true,  5 },
+        { "Voix",        90.0f, 1000.0f,  5000.0f, { -12.0f,  -3.0f,   0.0f,  -1.0f,  -4.0f,  -7.0f, -11.0f }, true,  5, { 3.0f, 10.0f, 120.0f, 8.0f } },
         // Nappe (pads, synthés de fond) : doit rester en retrait, sans grave qui
         // encombre la basse. Pas de recherche de résonances : une note tenue
         // pendant toute l'écoute ressemblerait à une résonance.
-        { "Nappe",      120.0f,  300.0f,  2000.0f, { -10.0f,  -3.0f,   0.0f,  -2.0f,  -5.0f,  -8.0f, -13.0f }, false, 1 },
+        { "Nappe",      120.0f,  300.0f,  2000.0f, { -10.0f,  -3.0f,   0.0f,  -2.0f,  -5.0f,  -8.0f, -13.0f }, false, 1, { 2.0f, 40.0f, 300.0f, 5.0f } },
     }};
 
     // Sources : ce qui produit le son, donc les défauts possibles.
@@ -532,6 +538,10 @@ Correction calculerCorrection (const Role& r, const Source& s, const Son& n, con
     c.refValide = m.refValide;
     c.refDb = m.refDb;
 
+    // Compresseur du rôle, réglé d'après la dynamique de la piste écoutée.
+    c.compression = calculerCompression (r.compression, m);
+    c.histo = m.histo;
+
     // 3. Résonances : atténuation prudente, de 2 à 4 dB selon le dépassement.
     //    Même filtrées par la persistance, certaines bosses peuvent n'être que
     //    des notes tenues ; une atténuation légère limite les dégâts dans ce cas.
@@ -550,6 +560,82 @@ Correction calculerCorrection (const Role& r, const Source& s, const Son& n, con
     }
 
     return c;
+}
+
+// --- Compression ---------------------------------------------------------------
+
+float gainCompression (const Compression& c, float niveauDb) noexcept
+{
+    if (! c.valide || c.ratio <= 1.0f)
+        return 0.0f;
+
+    // Pente au-dessus du seuil : avec un ratio de 3, on retire 2/3 de ce qui dépasse.
+    const float pente = 1.0f / c.ratio - 1.0f;
+    const float depassement = niveauDb - c.seuilDb;
+
+    if (2.0f * depassement < -genouDb)
+        return 0.0f;                                  // nettement sous le seuil : rien
+
+    if (2.0f * std::abs (depassement) <= genouDb)     // dans le genou : transition en douceur
+        return pente * (depassement + genouDb * 0.5f) * (depassement + genouDb * 0.5f) / (2.0f * genouDb);
+
+    return pente * depassement;                       // nettement au-dessus : plein ratio
+}
+
+Compression calculerCompression (const ReglageCompression& r, const Mesure& m) noexcept
+{
+    Compression c;
+
+    if (! m.valide || ! m.histoValide)
+        return c;
+
+    // Le 90e centile : le niveau que la piste ne dépasse que 10 % du temps,
+    // autrement dit ses passages forts.
+    float cumul = 0.0f, niveauFort = niveauDeLaCase (nbHisto - 1);
+
+    for (int k = 0; k < nbHisto; ++k)
+    {
+        cumul += m.histo[(size_t) k];
+
+        if (cumul >= 0.9f)
+        {
+            niveauFort = niveauDeLaCase (k);
+            break;
+        }
+    }
+
+    c.valide = true;
+    c.seuilDb = niveauFort - r.profondeurDb;
+    c.ratio = r.ratio;
+    c.attaqueMs = r.attaqueMs;
+    c.relachementMs = r.relachementMs;
+    return c;
+}
+
+float rattrapageCompression (const Compression& c, const Histogramme& histo, float quantite) noexcept
+{
+    const float q = std::clamp (quantite, 0.0f, 1.0f);
+
+    if (! c.valide || q <= 0.0f)
+        return 0.0f;
+
+    // Énergie de la piste avant et après compression, niveau par niveau,
+    // d'après le temps passé à chacun. On rend exactement la différence.
+    double avant = 0.0, apres = 0.0;
+
+    for (int k = 0; k < nbHisto; ++k)
+    {
+        const double niveau = niveauDeLaCase (k);
+        const double part = histo[(size_t) k];
+        avant += part * std::pow (10.0, niveau / 10.0);
+        apres += part * std::pow (10.0, (niveau + (double) (q * gainCompression (c, (float) niveau))) / 10.0);
+    }
+
+    if (! (avant > 0.0) || ! (apres > 0.0))
+        return 0.0f;
+
+    // Plafonné à 12 dB : un histogramme aberrant ne doit pas déclencher un gros gain.
+    return (float) std::clamp (10.0 * std::log10 (avant / apres), 0.0, 12.0);
 }
 
 // --- Démasquage dynamique ------------------------------------------------------

@@ -618,6 +618,7 @@ int main()
             choisir (p, IdParam::role, (float) c.role);
             choisir (p, IdParam::source, 5.0f);        // Synthe
             choisir (p, IdParam::quantite, 100.0f);
+            choisir (p, IdParam::compressionActive, 0.0f);     // on isole la correction fixe
 
             p.demarrerEcoute();
             jouerBandes (p, 11.0, c.centres);
@@ -629,6 +630,116 @@ int main()
                       juce::String ("volume conserve a 0,5 dB pres : ") + c.nom + " (variation " + juce::String (variation, 2)
                       + " dB, compensation " + juce::String (dosee.compensationDb, 2) + " dB)");
         }
+    }
+
+    std::cout << "Compression" << std::endl;
+    {
+        rogus::Compression comp;
+        comp.valide = true;
+        comp.seuilDb = -20.0f;
+        comp.ratio = 4.0f;
+        verifier (rogus::gainCompression (comp, -40.0f) == 0.0f && std::abs (rogus::gainCompression (comp, -8.0f) + 9.0f) < 0.01f,
+                  "gain : rien sous le seuil, 3/4 du depassement retire au-dessus (ratio 4)");
+        verifier (std::abs (rogus::gainCompression (comp, -17.0f) + 2.25f) < 0.01f && std::abs (rogus::gainCompression (comp, -23.0f)) < 0.01f
+                  && rogus::gainCompression (comp, -20.0f) < 0.0f && rogus::gainCompression (comp, -20.0f) > -1.0f,
+                  "gain : le genou raccorde en douceur les deux zones");
+        verifier (rogus::gainCompression ({}, 0.0f) == 0.0f, "gain : un compresseur sans mesure ne fait rien");
+
+        // Une piste qui passe autant de temps a chaque niveau entre -30 et -10 dBFS.
+        rogus::Mesure m;
+        m.valide = m.histoValide = true;
+        const int debut = rogus::caseDuNiveau (-30.0f), fin = rogus::caseDuNiveau (-10.5f);
+        for (int k = debut; k <= fin; ++k)
+            m.histo[(size_t) k] = 1.0f / (float) (fin - debut + 1);
+
+        const auto voix = rogus::calculerCompression (rogus::role (7).compression, m);
+        verifier (voix.valide && std::abs (voix.seuilDb - (-12.0f - 8.0f)) < 1.6f && voix.ratio == 3.0f,
+                  "seuil : pose 8 dB sous les passages forts de la voix (" + juce::String (voix.seuilDb, 1) + " dB)");
+
+        const float moitie = rogus::rattrapageCompression (voix, m.histo, 0.5f), plein = rogus::rattrapageCompression (voix, m.histo, 1.0f);
+        verifier (rogus::rattrapageCompression (voix, m.histo, 0.0f) == 0.0f && moitie > 0.3f && plein > moitie && plein < 6.0f,
+                  "volume rendu : nul a 0 %, croissant avec la quantite (" + juce::String (moitie, 1) + " puis "
+                  + juce::String (plein, 1) + " dB)");
+
+        m.histoValide = false;
+        verifier (! rogus::calculerCompression (rogus::role (7).compression, m).valide, "ecoute sans histogramme : pas de compression");
+
+        // Dans le moteur : une piste qui alterne passages forts et faibles (12 dB d'ecart).
+        struct Niveaux { double fortE = 0, fortS = 0, faibleE = 0, faibleS = 0; float ecartMax = 0; bool fini = true; };
+
+        auto jouerAlterne = [] (RogusProcessor& p, double secondes)
+        {
+            SourceBruit bruit (3, { 400.0f, 1600.0f });
+            juce::AudioBuffer<float> tampon (2, tailleBloc);
+            juce::MidiBuffer midi;
+            std::vector<float> entree ((size_t) tailleBloc);
+            Niveaux n;
+            juce::int64 position = 0;
+
+            for (int bloc = 0; bloc < (int) (secondes * fs / tailleBloc); ++bloc)
+            {
+                for (int i = 0; i < tailleBloc; ++i)
+                {
+                    const double t = (double) (position + i) / fs;
+                    const bool fort = std::fmod (t, 1.0) < 0.5;
+                    const float v = bruit.suivant() * (fort ? 0.5f : 0.125f);
+                    entree[(size_t) i] = v;
+                    tampon.setSample (0, i, v);
+                    tampon.setSample (1, i, v);
+                }
+
+                p.processBlock (tampon, midi);
+
+                for (int i = 0; i < tailleBloc; ++i, ++position)
+                {
+                    const double t = (double) position / fs, dansDemi = std::fmod (t, 0.5);
+                    const double e = entree[(size_t) i], s = tampon.getSample (0, i);
+                    n.fini = n.fini && std::isfinite (s);
+                    n.ecartMax = juce::jmax (n.ecartMax, (float) std::abs (s - e));
+
+                    // On laisse au compresseur le temps de reagir : debut de chaque demi-seconde ecarte.
+                    if (t < 1.0 || dansDemi < 0.2)
+                        continue;
+
+                    if (std::fmod (t, 1.0) < 0.5) { n.fortE += e * e;   n.fortS += s * s; }
+                    else                          { n.faibleE += e * e; n.faibleS += s * s; }
+                }
+            }
+
+            return n;
+        };
+
+        auto dB = [] (double a, double b) { return (float) (10.0 * std::log10 (a / b + 1.0e-30)); };
+
+        RogusProcessor p;
+        preparer (p);
+        choisir (p, IdParam::role, 7.0f);                    // Voix
+        choisir (p, IdParam::source, 5.0f);
+        choisir (p, IdParam::correctionActive, 0.0f);        // on isole la compression
+        choisir (p, IdParam::demasquageActif, 0.0f);
+        choisir (p, IdParam::compressionQuantite, 100.0f);
+        p.demarrerEcoute();
+        jouerAlterne (p, 11.0);
+        p.mettreAJour();
+        verifier (p.lireMesure().histoValide && p.lireCorrection().compression.valide, "ecoute : la dynamique de la piste est mesuree");
+
+        const auto n = jouerAlterne (p, 6.0);
+        const float ecartEntree = dB (n.fortE, n.faibleE), ecartSortie = dB (n.fortS, n.faibleS);
+        const float energie = dB (n.fortS + n.faibleS, n.fortE + n.faibleE);
+        verifier (n.fini && ecartSortie < ecartEntree - 2.0f && ecartSortie > 4.0f,
+                  "compression a 100 % : l'ecart fort/faible passe de " + juce::String (ecartEntree, 1) + " a "
+                  + juce::String (ecartSortie, 1) + " dB");
+        verifier (std::abs (energie) < 1.5f, "compression a 100 % : volume global garde a 1,5 dB pres (variation "
+                                              + juce::String (energie, 2) + " dB)");
+
+        choisir (p, IdParam::compressionQuantite, 0.0f);
+        jouerAlterne (p, 2.0);
+        verifier (jouerAlterne (p, 2.0).ecartMax == 0.0f, "quantite 0 % : sortie identique a l'entree");
+
+        choisir (p, IdParam::compressionQuantite, 100.0f);
+        choisir (p, IdParam::compressionActive, 0.0f);
+        jouerAlterne (p, 2.0);
+        verifier (jouerAlterne (p, 2.0).ecartMax == 0.0f, "compression decochee : sortie identique a l'entree");
     }
 
     std::cout << "Demasquage : briques de calcul" << std::endl;
@@ -694,6 +805,7 @@ int main()
             choisir (p, IdParam::role, (float) role);
             choisir (p, IdParam::source, 5.0f);              // Synthe
             choisir (p, IdParam::correctionActive, 0.0f);    // on isole le demasquage
+            choisir (p, IdParam::compressionActive, 0.0f);
             p.demarrerEcoute();
 
             SourceBruit bruit (graine, centres);
@@ -851,13 +963,16 @@ int main()
                 const auto id = etat.getChild (i).getProperty ("id").toString();
 
                 if (id == IdParam::priorite || id == IdParam::demasquageActif
-                    || id == IdParam::demasquageQuantite || id == IdParam::reactivite)
+                    || id == IdParam::demasquageQuantite || id == IdParam::reactivite
+                    || id == IdParam::compressionActive || id == IdParam::compressionQuantite)
                     etat.removeChild (i, nullptr);
             }
 
             auto noeudMesure = etat.getChildWithName ("Mesure");
             for (int i = 0; i < rogus::nbBandes; ++i)
                 noeudMesure.removeProperty ("ref" + juce::String (i), nullptr);
+            for (int i = 0; i < rogus::nbHisto; ++i)
+                noeudMesure.removeProperty ("histo" + juce::String (i), nullptr);
 
             fixerParametre (etat, IdParam::role, 7.0f);          // Voix
             fixerParametre (etat, IdParam::quantite, 35.0f);
@@ -873,6 +988,18 @@ int main()
             verifier (q.lirePriorite() == 5 && q.lireDemasquageActif()
                       && std::abs (q.parametres.getRawParameterValue (IdParam::demasquageQuantite)->load() - 50.0f) < 0.01f,
                       "projet d'avant l'etape 3 : nouveaux reglages a leur valeur par defaut (priorite du role)");
+            verifier (! q.lireMesure().histoValide && ! q.lireCorrection().compression.valide
+                      && std::abs (q.parametres.getRawParameterValue (IdParam::compressionQuantite)->load() - 50.0f) < 0.01f,
+                      "projet d'avant l'etape 4 : pas de compression tant que la piste n'est pas reecoutee");
+        }
+
+        // L'histogramme des niveaux survit lui aussi à un enregistrement.
+        {
+            RogusProcessor reluHisto;
+            reluHisto.setStateInformation (actuel.getData(), (int) actuel.getSize());
+            verifier (base.lireMesure().histoValide && reluHisto.lireMesure().histo == base.lireMesure().histo
+                      && reluHisto.lireCorrection().compression.valide,
+                      "sauvegarde : histogramme des niveaux et compresseur retrouves");
         }
 
         // Le repère de niveau survit à un enregistrement.
