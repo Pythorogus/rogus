@@ -108,7 +108,7 @@ Principes décidés :
 
 Constat sur cette même capture (guitare électrique claire, rôle Rythmique, quantité 60 %) : la correction fixe monte le grave de +5,5 dB vers 60 Hz et l'aigu de +6 dB au-dessus de 10 kHz, les médiums restant à 0. Elle était donc en butée aux deux bouts. **Corrigé pour le grave** le même jour (`calculerCorrection`) : on ne monte plus une bande située à moins d'une octave au-dessus du coupe-bas (bord de la zone utile : pour une guitare, la bande de 100 Hz ne contient presque que de la ronflette), ni une bande presque vide. « Ne pas monter » se juge **après** la compensation de volume : ces bandes sont plafonnées au gain moyen de la piste pondéré par l'énergie, sinon la compensation les remonte quand même (c'était la cause des +5,5 dB). Basse et kick (coupe-bas à 30 Hz) ne sont pas concernés. **Reste ouvert** : la montée de l'aigu (+6 dB au-dessus de 10 kHz) n'est pas touchée, en attente du jugement de Pierre à l'oreille ; et cette butée montre que la cible « Rythmique » est loin de sa guitare claire.
 
-**Étape 4 écrite, compilée, testée sur signaux de synthèse et installée** (14 novembre 2026) : compression par rôle. Chaque piste est écoutée comme pour l'EQ ; l'écoute remplit en plus un histogramme des niveaux, qui sert à poser le seuil sous les passages forts de la piste. Deux réglages s'ajoutent : `compressionActive` (**non** par défaut : elle est surtout utile sur la voix et la basse, et se coche au cas par cas) et `compressionQuantite` (50 %). Les tests passent : à 100 %, un écart de 12 dB entre passages forts et faibles devient 7,7 dB, et le volume global ne bouge que de −0,46 dB. **Pas encore écoutée** : les réglages par rôle sont des points de départ. La première version ne compressait presque pas : son détecteur lisait l'échantillon isolé au lieu de l'enveloppe de crête (la même que celle de l'écoute), il se croyait donc 6 à 8 dB sous le seuil. Voir « Fonctionnement de la compression » plus bas.
+**Étape 4 écrite, compilée, testée sur signaux de synthèse, installée puis écoutée par Pierre** (14 novembre 2026) : compression par rôle. Chaque piste est écoutée comme pour l'EQ ; l'écoute remplit en plus un histogramme des niveaux, qui sert à poser le seuil sous les passages forts de la piste. Deux réglages s'ajoutent : `compressionActive` (**non** par défaut : elle est surtout utile sur la voix et la basse, et se coche au cas par cas) et `compressionQuantite` (50 %). Les tests passent : à 100 %, un écart de 12 dB entre passages forts et faibles devient 7,7 dB, et le volume global ne bouge que de −0,46 dB. **Écoute du 14 novembre 2026 : sur la basse, Pierre préfère avec la compression.** La voix et les autres rôles n'ont pas encore été écoutés : les réglages par rôle restent des points de départ. La première version ne compressait presque pas : son détecteur lisait l'échantillon isolé au lieu de l'enveloppe de crête (la même que celle de l'écoute), il se croyait donc 6 à 8 dB sous le seuil ; corrigé avant l'écoute. Voir « Fonctionnement de la compression » plus bas.
 
 | Fichier | Rôle |
 |---|---|
@@ -157,7 +157,7 @@ Fonctionnement de la compression (étape 4) :
 7. **Écoute obligatoire** : sans histogramme (piste jamais écoutée, ou projet d'avant l'étape 4), la compression ne fait rien, même cochée. Une nouvelle écoute la rend possible ; l'interrupteur reste à cocher, et il est **à l'arrêt par défaut**.
 8. **Paramètres ajoutés** (à la suite) : `compressionActive` (non), `compressionQuantite` (50 %). La mesure gagne les champs `histo0` à `histo47`, facultatifs : pas de changement de `versionEtat`. Raison du défaut à l'arrêt : la compression est surtout utile sur la voix et la basse ; sur une guitare déjà compressée par l'ampli ou sur des drums dont on veut garder les transitoires, elle peut faire plus de mal que de bien.
 
-Réglages de départ par rôle (table `tableRoles` de `Correction.cpp`, à affiner à l'oreille) :
+Réglages par rôle (table `tableRoles` de `Correction.cpp`) : la basse est validée à l'oreille ; les autres restent à affiner.
 
 | Rôle | Ratio | Attaque | Relâchement | Seuil sous les passages forts |
 |---|---|---|---|---|
@@ -181,13 +181,13 @@ Limites connues de l'étape 3 :
 
 Limites connues de l'étape 4 :
 
-- **Réglages par rôle devinés** : ratio (2 à 4), attaque (10 à 40 ms), relâchement (80 à 300 ms), profondeur (4 à 8 dB) n'ont pas été validés à l'oreille. C'est le premier réglage à revoir, comme les cibles de l'EQ.
+- **Réglages par rôle partiellement devinés** : la basse est validée à l'oreille. Ratio, attaque, relâchement et profondeur des autres rôles n'ont pas encore été validés ; la voix est le prochain cas à écouter.
 - Compresseur simple, large bande, sans lookahead : un seul seuil et un seul ratio par piste. Il ne remplace pas un compresseur multibande sur une basse ou une voix difficile.
 - Le niveau est une enveloppe de crête : un son très percussif fait baisser le gain à chaque coup. C'est voulu, mais peut s'entendre sur une piste déjà compressée.
 - Le relâchement effectif est un peu plus long que celui du rôle : l'enveloppe de niveau retombe en 100 ms **et** le gain a son propre relâchement. À affiner à l'écoute.
 - Le volume rendu est calculé en énergie, pas en sonie perçue, et seule la compensation globale de l'EQ est retirée du niveau : le volume peut bouger de quelques dixièmes de dB sur un morceau réel.
 - L'histogramme ne compte pas le silence sous −55 dBFS : une piste très faible est mesurée sur peu d'événements, et une piste entièrement sous ce seuil n'a pas de compression.
-- La fenêtre a été vérifiée par un rendu hors écran (mise en page), mais pas dans FL Studio ; l'écoute et l'export ne sont pas encore testés.
+- La fenêtre et la compression ont été vérifiées dans FL Studio sur la basse. La voix, les autres rôles et l'identité écoute / export ne sont pas encore vérifiés.
 
 Limites connues de l'étape 2 :
 
