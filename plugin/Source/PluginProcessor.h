@@ -183,12 +183,14 @@ private:
     std::array<std::uint32_t, rogus::nbHisto> histoEcoute {};
     double enveloppeEcoute = 0.0, coefEnveloppeEcoute = 0.0;
     int compteurHisto = 0;
-    // En marche : réduction en cours (dB, <= 0) et gain rendu.
+    // En marche : enveloppe de crête (linéaire) qui commande le compresseur,
+    // réduction en cours (dB, <= 0), quantité lissée et gain rendu.
+    double enveloppeComp = 0.0;
     double reductionComp = 0.0;
+    float quantiteCompLisse = 0.0f;
     float rattrapageLisse = 0.0f, rattrapageVise = 0.0f;
     float quantiteCompCalculee = -1.0f;
     int versionCompCalculee = -1;
-    bool compNeutre = true;
 
     // Démasquage : mesure de l'énergie par bande (pour l'annoncer aux autres)...
     rogus::BancBandes filtresAnalyse;

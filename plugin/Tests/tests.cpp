@@ -740,6 +740,20 @@ int main()
         choisir (p, IdParam::compressionActive, 0.0f);
         jouerAlterne (p, 2.0);
         verifier (jouerAlterne (p, 2.0).ecartMax == 0.0f, "compression decochee : sortie identique a l'entree");
+
+        // Sans écoute, le compresseur n'a pas d'histogramme : il ne doit rien
+        // faire, même coché et à 100 %. Un projet neuf ou ouvert avec cette
+        // version garde donc son son tant que la piste n'a pas été écoutée.
+        {
+            RogusProcessor neuf;
+            preparer (neuf);
+            choisir (neuf, IdParam::correctionActive, 0.0f);
+            choisir (neuf, IdParam::demasquageActif, 0.0f);
+            choisir (neuf, IdParam::compressionQuantite, 100.0f);
+            jouerAlterne (neuf, 2.0);
+            verifier (jouerAlterne (neuf, 2.0).ecartMax == 0.0f,
+                      "sans ecoute : la compression ne touche pas au son, meme a 100 %");
+        }
     }
 
     std::cout << "Demasquage : briques de calcul" << std::endl;

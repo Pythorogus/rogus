@@ -108,13 +108,15 @@ Principes décidés :
 
 Constat sur cette même capture (guitare électrique claire, rôle Rythmique, quantité 60 %) : la correction fixe monte le grave de +5,5 dB vers 60 Hz et l'aigu de +6 dB au-dessus de 10 kHz, les médiums restant à 0. Elle était donc en butée aux deux bouts. **Corrigé pour le grave** le même jour (`calculerCorrection`) : on ne monte plus une bande située à moins d'une octave au-dessus du coupe-bas (bord de la zone utile : pour une guitare, la bande de 100 Hz ne contient presque que de la ronflette), ni une bande presque vide. « Ne pas monter » se juge **après** la compensation de volume : ces bandes sont plafonnées au gain moyen de la piste pondéré par l'énergie, sinon la compensation les remonte quand même (c'était la cause des +5,5 dB). Basse et kick (coupe-bas à 30 Hz) ne sont pas concernés. **Reste ouvert** : la montée de l'aigu (+6 dB au-dessus de 10 kHz) n'est pas touchée, en attente du jugement de Pierre à l'oreille ; et cette butée montre que la cible « Rythmique » est loin de sa guitare claire.
 
+**Étape 4 écrite, compilée et testée sur signaux de synthèse** (14 novembre 2026) : compression par rôle. Chaque piste est écoutée comme pour l'EQ ; l'écoute remplit en plus un histogramme des niveaux, qui sert à poser le seuil sous les passages forts de la piste. Deux réglages s'ajoutent : `compressionActive` (oui) et `compressionQuantite` (50 %). Les tests passent : à 100 %, un écart de 12 dB entre passages forts et faibles devient 7,7 dB, et le volume global ne bouge que de −0,46 dB. **Pas encore installée ni écoutée** : les réglages par rôle sont des points de départ. La première version ne compressait presque pas : son détecteur lisait l'échantillon isolé au lieu de l'enveloppe de crête (la même que celle de l'écoute), il se croyait donc 6 à 8 dB sous le seuil. Voir « Fonctionnement de la compression » plus bas.
+
 | Fichier | Rôle |
 |---|---|
 | `CMakeLists.txt` | projet CMake ; télécharge JUCE 8.0.9 (version figée) à la première configuration |
 | `Source/Correction.*` | cœur sans dépendance au plugin : tables des rôles, sources et sons, analyse d'une écoute, calcul de la correction, filtres, briques du démasquage |
 | `Source/Orchestre.*` | mémoire partagée entre les instances du plugin : chacune y annonce ce qu'elle joue |
-| `Source/PluginProcessor.*` | moteur audio : écoute de la piste, filtrage, annonces et démasquage, sauvegarde |
-| `Source/PluginEditor.*` | fenêtre : trois menus, courbe appliquée, correction fixe, démasquage, textes d'état |
+| `Source/PluginProcessor.*` | moteur audio : écoute de la piste (spectre et dynamique), filtrage, compression, annonces et démasquage, sauvegarde |
+| `Source/PluginEditor.*` | fenêtre : trois menus, courbe appliquée, correction fixe, compression, démasquage, textes d'état |
 | `Tests/tests.cpp` | tests du moteur hors FL Studio |
 | `compiler.ps1` | configure et compile en Release |
 | `tester.ps1` | compile et lance les tests |
@@ -144,6 +146,31 @@ Fonctionnement du démasquage (étape 3) :
 6. **Même résultat à l'écoute et à l'export** : les ticks sont numérotés d'après la position de lecture de l'hôte, et une instance ne lit que le tick terminé avant le début de son bloc. L'ordre de traitement des pistes et la taille des blocs ne changent donc rien (testé : sortie identique à l'échantillon près pour l'ordre inversé et pour des blocs de 256 contre 512 ; 0,1 dB près pour des blocs de 480, non alignés sur les ticks). Si l'hôte ne donne pas la position (ou lecture arrêtée) : repli sur la dernière annonce de chaque piste, ignorée après 250 ms, sans garantie d'identité à l'export.
 7. **Paramètres ajoutés** (à la suite, valeurs par défaut pour les anciens projets) : `priorite` (Auto), `demasquageActif` (oui), `demasquageQuantite` (50 %), `reactivite` (50 %). La mesure gagne les champs `ref0` à `ref6`, facultatifs : pas de changement de `versionEtat`.
 
+Fonctionnement de la compression (étape 4) :
+
+1. **Mesure de la dynamique** : pendant l'écoute, chaque échantillon met à jour une enveloppe de crête (montée immédiate, descente en 100 ms). Une valeur sur 32 est rangée dans un histogramme de 48 cases de 1,5 dB, de −72 à 0 dBFS ; le silence sous −55 dBFS n'est pas compté. L'histogramme part avec la mesure dans le projet de l'hôte.
+2. **Seuil** : le 90e centile de l'histogramme donne le niveau des passages forts. Le seuil est posé `profondeurDb` sous ce niveau (4 à 8 dB selon le rôle). Une piste enregistrée bas est donc compressée comme une piste enregistrée fort : le réglage est relatif, pas une valeur absolue.
+3. **Courbe** : genou de 6 dB centré sur le seuil, puis le ratio du rôle ; en dessous du genou, rien n'est changé. La quantité (0 à 100 %) dose la réduction.
+4. **Détecteur** : le niveau est lu par une enveloppe de crête, **la même que celle de l'écoute**. C'est indispensable : avec un niveau plus lissé, le compresseur se croit 6 à 8 dB sous le seuil et ne fait presque rien (c'était le défaut de la première version). L'attaque et le relâchement du rôle lissent le **gain**, pas l'enveloppe : une attaque lente laisse passer le début des notes (le claquement du kick), un relâchement lent fait revenir le son en douceur.
+5. **Volume rendu** : un gain fixe, calculé d'après l'histogramme, rend l'énergie retirée (plafonné à 12 dB, lissé sur 50 ms). Il ne « pompe » pas : c'est le compresseur qui bouge, pas lui. L'histogramme étant mesuré avant la correction fixe, la compensation globale de celle-ci est retirée du niveau lu ; l'effet spectral de l'EQ, lui, n'est pas compensé.
+6. **Place dans le trajet** : correction fixe → compression → démasquage. La place cédée aux autres pistes n'est donc pas « rattrapée » par le gain rendu.
+7. **Écoute obligatoire** : sans histogramme (piste jamais écoutée, ou projet d'avant l'étape 4), la compression ne fait rien, même cochée. Une nouvelle écoute l'active.
+8. **Paramètres ajoutés** (à la suite) : `compressionActive` (oui), `compressionQuantite` (50 %). La mesure gagne les champs `histo0` à `histo47`, facultatifs : pas de changement de `versionEtat`.
+
+Réglages de départ par rôle (table `tableRoles` de `Correction.cpp`, à affiner à l'oreille) :
+
+| Rôle | Ratio | Attaque | Relâchement | Seuil sous les passages forts |
+|---|---|---|---|---|
+| Lead | 3 | 15 ms | 150 ms | 6 dB |
+| Rythmique | 2,5 | 20 ms | 150 ms | 5 dB |
+| Arpège | 2,5 | 15 ms | 200 ms | 6 dB |
+| Basse | 4 | 25 ms | 200 ms | 8 dB |
+| Kick | 4 | 30 ms | 100 ms | 4 dB |
+| Snare | 3 | 20 ms | 120 ms | 4 dB |
+| Hits | 2 | 10 ms | 150 ms | 4 dB |
+| Voix | 3 | 10 ms | 120 ms | 8 dB |
+| Nappe | 2 | 40 ms | 300 ms | 5 dB |
+
 Limites connues de l'étape 3 :
 
 - Les instances se voient dans FL Studio tant qu'elles sont chargées normalement. Si le texte d'état affichait « aucune autre piste Rogus visible » avec plusieurs instances (plugin « bridgé » par FL, par exemple), elles seraient isolées dans des programmes séparés et il faudrait une vraie communication entre programmes.
@@ -151,6 +178,16 @@ Limites connues de l'étape 3 :
 - Réglages devinés, à affiner à l'oreille : profondeur maximale (6 dB), seuils d'activité (−20 / −8 dB), temps d'attaque et de relâchement, priorités par défaut, zones des rôles.
 - Il faut refaire une écoute sur chaque piste pour qu'elle soit prise en compte.
 - Dans les tests, plusieurs instances coexistent dans le même programme et se voient : garder des priorités égales entre elles, ou les détruire, pour qu'un test n'en influence pas un autre.
+
+Limites connues de l'étape 4 :
+
+- **Réglages par rôle devinés** : ratio (2 à 4), attaque (10 à 40 ms), relâchement (80 à 300 ms), profondeur (4 à 8 dB) n'ont pas été validés à l'oreille. C'est le premier réglage à revoir, comme les cibles de l'EQ.
+- Compresseur simple, large bande, sans lookahead : un seul seuil et un seul ratio par piste. Il ne remplace pas un compresseur multibande sur une basse ou une voix difficile.
+- Le niveau est une enveloppe de crête : un son très percussif fait baisser le gain à chaque coup. C'est voulu, mais peut s'entendre sur une piste déjà compressée.
+- Le relâchement effectif est un peu plus long que celui du rôle : l'enveloppe de niveau retombe en 100 ms **et** le gain a son propre relâchement. À affiner à l'écoute.
+- Le volume rendu est calculé en énergie, pas en sonie perçue, et seule la compensation globale de l'EQ est retirée du niveau : le volume peut bouger de quelques dixièmes de dB sur un morceau réel.
+- L'histogramme ne compte pas le silence sous −55 dBFS : une piste très faible est mesurée sur peu d'événements, et une piste entièrement sous ce seuil n'a pas de compression.
+- La fenêtre a été vérifiée par un rendu hors écran (mise en page), mais pas dans FL Studio ; l'écoute et l'export ne sont pas encore testés.
 
 Limites connues de l'étape 2 :
 
@@ -167,7 +204,7 @@ Outils nécessaires (installés sur ce poste avec winget) : Visual Studio Build 
 .\plugin\installer.ps1
 ```
 
-Les tests vérifient des propriétés mesurables (réponse des filtres, bornes de la correction, neutralité à 0 %, déroulement d'une écoute, sauvegarde). Ils ne disent rien de la qualité sonore. Les relancer après toute modification du moteur.
+Les tests vérifient des propriétés mesurables (réponse des filtres, bornes de la correction, neutralité à 0 %, déroulement d'une écoute, sauvegarde, courbe et volume du compresseur). Ils ne disent rien de la qualité sonore. Les relancer après toute modification du moteur.
 
 Fermer FL Studio avant d'installer (un plugin chargé est verrouillé). Ce dossier est l'emplacement VST3 standard : dans FL Studio, il suffit de relancer la recherche (Options > Manage plugins > Find installed plugins).
 
@@ -175,7 +212,7 @@ Règles du code audio : pas d'allocation mémoire ni d'attente sur un verrou dan
 
 **Règle de compatibilité (exigence de Pierre) : une nouvelle version doit toujours reprendre les réglages enregistrés par la précédente.** Charger la nouvelle version dans un projet existant ne doit rien faire perdre.
 
-- Ne jamais supprimer ni renommer un identifiant de paramètre (`role`, `source`, `son`, `correctionActive`, `quantite`, `priorite`, `demasquageActif`, `demasquageQuantite`, `reactivite`), ni les codes du plugin (`Rogs` / `Rgs1`).
+- Ne jamais supprimer ni renommer un identifiant de paramètre (`role`, `source`, `son`, `correctionActive`, `quantite`, `priorite`, `demasquageActif`, `demasquageQuantite`, `reactivite`, `compressionActive`, `compressionQuantite`), ni les codes du plugin (`Rogs` / `Rgs1`).
 - Les listes de choix ne s'enregistrent que par leur numéro : on n'en réordonne ni n'en retire jamais une entrée ; les nouvelles s'ajoutent **à la fin**.
 - Si un changement incompatible est vraiment nécessaire : augmenter `versionEtat` dans `PluginProcessor.cpp`, écrire la conversion depuis la version précédente dans `migrerEtat`, et ajouter un test qui fabrique un faux ancien état (voir `etatEtape2` dans `Tests/tests.cpp`) et vérifie ce qui est repris. Les tests doivent échouer si on retire la conversion.
 - Formats déjà connus : étape 1 et étape 2 (sans numéro de version, converties à l'ouverture), version 3 actuelle (trois menus). L'ancien rôle de l'étape 2 (6 choix) est converti en rôle + source.

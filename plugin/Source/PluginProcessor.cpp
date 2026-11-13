@@ -377,12 +377,13 @@ void RogusProcessor::prepareToPlay (double frequenceEchantillonnage, int)
     // Compresseur : on repart d'un état vierge. L'enveloppe de l'écoute retombe en 100 ms.
     coefEnveloppeEcoute = std::exp (-1.0 / (frequenceEch * 0.1));
     enveloppeEcoute = 0.0;
+    enveloppeComp = 0.0;
     reductionComp = 0.0;
+    quantiteCompLisse = lireQuantiteCompression();
     quantiteCompCalculee = -1.0f;
     versionCompCalculee = -1;
     rattrapageVise = rogus::rattrapageCompression (cible.compression, cible.histo, lireQuantiteCompression());
     rattrapageLisse = rattrapageVise;
-    compNeutre = true;
 
     // Démasquage : on repart d'un état vierge.
     filtresAnalyse = rogus::construireFiltresAnalyse (frequenceEch);
@@ -581,23 +582,46 @@ void RogusProcessor::processBlock (juce::AudioBuffer<float>& tampon, juce::MidiB
         if (std::abs (rattrapageVise - rattrapageLisse) < 0.005f)
             rattrapageLisse = rattrapageVise;
 
-        // À l'arrêt, une fois la réduction et le gain revenus à zéro : le son passe intact.
-        if (quantiteComp <= 0.0f && reductionComp > -0.01 && rattrapageLisse == 0.0f)
+        // La quantité glisse elle aussi : tourner le curseur pendant la lecture
+        // ne doit pas faire sauter le gain d'un bloc à l'autre (un « clic »).
+        quantiteCompLisse += (quantiteComp - quantiteCompLisse) * part;
+
+        if (std::abs (quantiteComp - quantiteCompLisse) < 0.001f)
+            quantiteCompLisse = quantiteComp;
+
+        // À l'arrêt, une fois la quantité et le gain revenus à zéro : le son passe intact.
+        if (quantiteCompLisse <= 0.0f && rattrapageLisse == 0.0f)
         {
             reductionComp = 0.0;
-            compNeutre = true;
+            enveloppeComp = 0.0;
             reductionCompVue.store (0.0f);
+            rattrapageVu.store (0.0f);
         }
         else
         {
-            compNeutre = false;
-
-            // Attaque : vitesse à laquelle la réduction s'installe ; relâchement : à laquelle elle repart.
+            // Détecteur : enveloppe de crête, la MÊME que pendant l'écoute
+            // (montée immédiate, descente en 100 ms). C'est indispensable : le
+            // seuil est posé d'après cet histogramme de niveaux. Si le
+            // compresseur lisait une enveloppe plus lisse, il croirait la piste
+            // 6 à 8 dB plus faible qu'elle n'est et ne compresserait presque rien.
+            // Un échantillon seul ne convient pas non plus : il passe par zéro à
+            // chaque période, donc la moitié du temps le niveau paraîtrait nul.
+            // L'attaque et le relâchement du rôle s'appliquent ensuite au GAIN
+            // (plus bas), pas à l'enveloppe : ils décident à quelle vitesse la
+            // réduction s'installe, et laissent ainsi passer l'attaque des notes.
+            const double coefEnveloppe = std::exp (-1.0 / (frequenceEch * 0.1));
             const double coefAttaque = std::exp (-1.0 / (frequenceEch * 0.001 * juce::jmax (1.0f, comp.attaqueMs)));
             const double coefRelache = std::exp (-1.0 / (frequenceEch * 0.001 * juce::jmax (1.0f, comp.relachementMs)));
             float* gauche = tampon.getWritePointer (0);
             float* droite = nbCanaux > 1 ? tampon.getWritePointer (1) : nullptr;
             double somme = 0.0;
+
+            // Le seuil du compresseur a été posé d'après le niveau d'ENTRÉE du
+            // plugin (l'écoute se fait avant la correction fixe). La compensation
+            // de volume de cette correction décale le niveau que voit le
+            // compresseur : on la retire pour comparer des niveaux comparables.
+            // Sans cela, une piste corrigée serait compressée plus que prévu.
+            const float niveauEntreeDb = lissee.compensationDb;
 
             for (int n = 0; n < nbEch; ++n)
             {
@@ -605,9 +629,12 @@ void RogusProcessor::processBlock (juce::AudioBuffer<float>& tampon, juce::MidiB
                 // le même gain, sinon l'image stéréo bougerait.
                 const float crete = droite != nullptr ? juce::jmax (std::abs (gauche[n]), std::abs (droite[n]))
                                                       : std::abs (gauche[n]);
-                const float niveau = 20.0f * std::log10 (crete + 1.0e-9f);
-                const double visee = (double) (quantiteComp * rogus::gainCompression (comp, niveau));
+                enveloppeComp = juce::jmax ((double) crete, enveloppeComp * coefEnveloppe);
 
+                const float niveau = (float) (20.0 * std::log10 (enveloppeComp + 1.0e-9)) - niveauEntreeDb;
+                const double visee = (double) (quantiteCompLisse * rogus::gainCompression (comp, niveau));
+
+                // Attaque quand la réduction doit augmenter, relâchement quand elle revient.
                 reductionComp = visee + (reductionComp - visee) * (visee < reductionComp ? coefAttaque : coefRelache);
                 somme += reductionComp;
 
@@ -619,9 +646,8 @@ void RogusProcessor::processBlock (juce::AudioBuffer<float>& tampon, juce::MidiB
             }
 
             reductionCompVue.store ((float) (somme / nbEch));
+            rattrapageVu.store (rattrapageLisse);
         }
-
-        rattrapageVu.store (rattrapageLisse);
     }
 
     // --- Couche 3 : démasquage dynamique ---

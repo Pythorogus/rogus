@@ -285,9 +285,9 @@ juce::String RogusEditor::texteCompression() const
         return rogus::fr ("Fais une écoute pour activer la compression (elle doit connaître la dynamique de la piste).");
 
     // Ce que fait le compresseur en ce moment : de combien il baisse, et ce qu'il rend.
-    return rogus::fr ("Seuil ") + ecrireDb (comp.seuilDb) + " dB, ratio " + ecrireDb (comp.ratio)
-         + rogus::fr (" : baisse de ") + ecrireDb (-moteur.lireReductionCompression())
-         + rogus::fr (" dB en ce moment, volume rendu : +") + ecrireDb (moteur.lireRattrapage()) + " dB.";
+    return rogus::fr ("Seuil ") + ecrireDb (comp.seuilDb) + " dB, ratio " + juce::String (juce::roundToInt (comp.ratio))
+         + rogus::fr (", baisse de ") + ecrireDb (-moteur.lireReductionCompression())
+         + rogus::fr (" dB, volume rendu : +") + ecrireDb (moteur.lireRattrapage()) + " dB.";
 }
 
 juce::String RogusEditor::texteDemasquage() const
