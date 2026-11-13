@@ -95,8 +95,8 @@ Principes décidés :
 2. **EQ fixe par rôle** : écoute, cible par instrument, dosage.
 3. **Orchestration** : communication entre instances, priorités, démasquage dynamique.
 4. **Compression** par rôle.
-5. Plus tard : contrôle des prises (saturation, bruit, ronflette), explications générées par un modèle de langage.
-6. **Optionnel** : plugin sur la piste master, en lecture seule au départ. Il reçoit l'énergie publiée par toutes les instances et affiche la carte des collisions entre pistes, ainsi que le volume perçu (LUFS) et la crête réelle en direct. Il ne modifie pas les pistes. Une action sur le bus (limiteur, cible globale) ne sera envisagée qu'après, pour éviter deux systèmes de décision concurrents.
+5. **Plus tard** : `Rogus Prise`, un plugin séparé pour contrôler les prises (ronflette, bruit, saturation), et éventuellement des explications. Reporté après le master.
+6. **Plugin master en lecture seule** : un plugin séparé, sans mémoire partagée, posé sur la piste master. Il mesure le volume perçu (LUFS intégré et court terme) et la crête réelle (dBTP) du mix en direct, avec des repères (−14 LUFS, −1 dBTP) et une remise à zéro. Il ne modifie pas le son. **Pas de carte des collisions** : retirée du plan le 14 novembre 2026, jugée redondante avec le démasquage et les fenêtres de piste. Une action sur le bus (limiteur, cible globale) reste hors de portée pour l'instant, pour éviter deux systèmes de décision concurrents avec `master.py`.
 
 ### État du plugin (dossier `plugin/`)
 
@@ -220,7 +220,7 @@ Règles du code audio : pas d'allocation mémoire ni d'attente sur un verrou dan
 
 **Licence** : JUCE est sous AGPL v3 (ou licence commerciale). Sans conséquence en usage personnel, contraignant en cas de distribution.
 
-Abandonné pour l'instant : profils de style et détection de genre pour le mastering, interface web locale.
+Abandonné pour l'instant : profils de style et détection de genre pour le mastering, interface web locale, carte des collisions entre pistes (redondante avec ce que montre déjà le démasquage).
 
 ## Conventions
 
