@@ -3,6 +3,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_dsp/juce_dsp.h>
 #include "Correction.h"
+#include "Orchestre.h"
 
 // Identifiants des paramètres. L'hôte s'en sert pour enregistrer les réglages
 // et l'automation : une fois un vrai projet FL sauvegardé, on ne les renomme plus.
@@ -13,6 +14,11 @@ namespace IdParam
     inline const juce::String son              { "son" };
     inline const juce::String correctionActive { "correctionActive" };
     inline const juce::String quantite         { "quantite" };
+    // Étape 3 : démasquage dynamique entre pistes.
+    inline const juce::String priorite            { "priorite" };
+    inline const juce::String demasquageActif     { "demasquageActif" };
+    inline const juce::String demasquageQuantite  { "demasquageQuantite" };
+    inline const juce::String reactivite          { "reactivite" };
 }
 
 // Le « moteur » du plugin. Étape 2 : EQ fixe par rôle.
@@ -73,6 +79,14 @@ public:
     float lireQuantiteEffective() const noexcept;      // 0 si la correction est désactivée
     double lireFrequenceEch() const noexcept  { return frequenceEchPartagee.load(); }
 
+    // --- Démasquage : ce que l'orchestration est en train de faire ---
+    int lirePriorite() const noexcept;                 // priorité effective, de 1 à 5
+    bool lireDemasquageActif() const noexcept;
+    rogus::Reductions lireReductions() const noexcept; // réduction appliquée par bande (dB, <= 0)
+    int nbPistesConnectees() const noexcept;           // instances de Rogus visibles, celle-ci comprise
+    int lireRoleDominant() const noexcept  { return roleDominant.load(); }   // rôle de la piste à qui on cède le plus, -1 si aucune
+    bool lireSynchroHote() const noexcept  { return synchroHoteVue.load(); }
+
     // Termine une analyse en attente et suit les changements de rôle.
     // Appelé par le minuteur ; public pour pouvoir être déclenché par les tests.
     void mettreAJour();
@@ -93,11 +107,24 @@ private:
     void terminerEcoute() noexcept;
     void adopterCorrection (bool attendre) noexcept;
 
+    // Orchestration (fil audio)
+    struct PositionBloc { std::int64_t debut = 0; bool hote = false; };
+    PositionBloc positionDuBloc (int nbEch) noexcept;
+    void analyserBandes (const juce::AudioBuffer<float>&, int nbCanaux, const PositionBloc&) noexcept;
+    void finirTick (std::int64_t tick) noexcept;
+    void lireAutresPistes (std::int64_t tick, bool tickPrecis, float quantite, int maPriorite,
+                           rogus::Reductions& visee, int& roleLePlusFort) const noexcept;
+    void calculerDemasquage (bool actif, const PositionBloc&, int nbEch) noexcept;
+
     std::atomic<float>* paramRole = nullptr;
     std::atomic<float>* paramSource = nullptr;
     std::atomic<float>* paramSon = nullptr;
     std::atomic<float>* paramActif = nullptr;
     std::atomic<float>* paramQuantite = nullptr;
+    std::atomic<float>* paramPriorite = nullptr;
+    std::atomic<float>* paramDemasquage = nullptr;
+    std::atomic<float>* paramDemQuantite = nullptr;
+    std::atomic<float>* paramReactivite = nullptr;
 
     // --- Partagé entre fils ---
 
@@ -120,6 +147,14 @@ private:
     std::atomic<float> progression { 0.0f };
     std::atomic<double> frequenceEchPartagee { 44100.0 };
 
+    // Orchestration : la place de cette instance dans l'orchestre, et ce que
+    // le fil audio laisse voir à l'interface.
+    rogus::Annonce* annonce = nullptr;
+    std::array<rogus::Equilibre, rogus::nbRoles> zonesRoles {};     // poids de la zone de chaque rôle, par bande
+    std::array<std::atomic<float>, rogus::nbBandes> reductionsVues {};
+    std::atomic<int> roleDominant { -1 };
+    std::atomic<bool> synchroHoteVue { false };
+
     // --- Réservé au fil audio ---
 
     double frequenceEch = 44100.0;
@@ -132,6 +167,24 @@ private:
     std::array<std::array<std::array<double, 2>, rogus::nbFiltres>, 2> memoire {};
     int versionVue = -1;
     bool filtresNeutres = true;
+
+    // Démasquage : mesure de l'énergie par bande (pour l'annoncer aux autres)...
+    rogus::BancBandes filtresAnalyse;
+    std::array<std::array<double, 2>, rogus::nbBandes> memoireAnalyse {};
+    std::array<double, rogus::nbBandes> energieTick {};      // énergie accumulée dans le tick en cours
+    int nbEchTick = 0;
+    std::int64_t positionAttendue = -1, compteurHorloge = 0;
+    bool dernierModeHote = false;
+    std::array<double, rogus::nbBandes> sommeRef {};         // pendant une écoute : repère de niveau
+    int nbTicksRef = 0;
+
+    // ... et réduction appliquée à cette piste pour laisser la place aux autres.
+    rogus::Reductions reductionLissee {};                    // dB, <= 0, valeur en cours
+    rogus::Reductions reductionFiltres {};                   // valeur pour laquelle les filtres sont calculés
+    std::int64_t dernierTickLu = -1;
+    rogus::BancBandes filtresDyn;
+    std::array<std::array<std::array<double, 2>, rogus::nbBandes>, 2> memoireDyn {};
+    bool dynNeutre = true;
 
     // Écoute : tampon circulaire des derniers échantillons, puis FFT.
     juce::dsp::FFT fft { rogus::ordreFft };

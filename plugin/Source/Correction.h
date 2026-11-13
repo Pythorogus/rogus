@@ -54,6 +54,7 @@ struct Role
     float importantMin, importantMax;       // zone où la piste doit rester lisible
     Equilibre cible;                        // équilibre visé
     bool resonances;                        // chercher des résonances étroites ?
+    int priorite;                           // priorité par défaut dans le mix, de 1 (fond) à 5 (devant)
 };
 
 struct Source
@@ -89,6 +90,13 @@ struct Mesure
     int nbRes = 0;
     std::array<float, nbResMax> resHz {};
     std::array<float, nbResMax> resExces {};     // dépassement en dB au-dessus du voisinage
+
+    // Niveau moyen de la piste dans chaque bande pendant qu'elle joue (dB),
+    // mesuré avec les mêmes filtres que le démasquage. Il sert de repère pour
+    // savoir, en direct, si la piste « joue » dans une bande. Absent des écoutes
+    // faites avant l'étape 3 : la piste ne peut alors pas demander de place.
+    bool refValide = false;
+    std::array<float, nbBandes> refDb {};
 };
 
 // Les réglages de filtres. Calculés pour une quantité de 100 %.
@@ -99,6 +107,19 @@ struct Correction
     int nbRes = 0;
     std::array<float, nbResMax> resHz {};
     std::array<float, nbResMax> resGain {};      // dB, toujours négatifs
+
+    // Compensation de volume. Le volume perçu dépend surtout de LÀ OÙ se trouve
+    // l'énergie de la piste : baisser une bande riche et en remonter une pauvre
+    // fait baisser le volume, même si les gains « s'annulent » en moyenne.
+    // `poids` donne la part d'énergie de la piste dans chaque bande (somme = 1,
+    // tout à zéro = pas de mesure) ; `compensationDb` est le gain global qui en
+    // découle, calculé par doser(). Un simple gain : la forme de la courbe ne change pas.
+    std::array<float, nbBandes> poids {};
+    float compensationDb = 0.0f;
+
+    // Repère de niveau de la piste (copie de la mesure), pour le démasquage.
+    bool refValide = false;
+    std::array<float, nbBandes> refDb {};
 };
 
 // Un filtre du 2e ordre, déjà normalisé (a0 = 1).
@@ -147,5 +168,39 @@ Mesure analyser (const std::vector<double>& spectre, double frequenceEch,
 // Mesure + rôle + source + son -> correction. Sans mesure valide : seulement
 // le coupe-bas, le plus haut de celui du rôle et de celui de la source.
 Correction calculerCorrection (const Role&, const Source&, const Son&, const Mesure&);
+
+// --- Démasquage dynamique (étape 3) -------------------------------------------
+// Quand deux pistes jouent dans la même zone de fréquences, la moins prioritaire
+// cède un peu de place à l'autre, seulement dans cette zone et seulement pendant
+// que l'autre joue. Les fonctions ci-dessous sont les briques de ce calcul.
+
+using Reductions = std::array<float, nbBandes>;      // dB par bande, toujours <= 0
+using BancBandes = std::array<Coefs, nbBandes>;
+
+// Réduction maximale d'une bande, à quantité 100 % et écart de priorité maximal.
+constexpr float profondeurMaxDb = 6.0f;
+
+// Sept passe-bande d'une octave : ils mesurent en direct l'énergie de la piste par bande.
+BancBandes construireFiltresAnalyse (double frequenceEch) noexcept;
+
+// Les sept filtres qui appliquent la réduction (mêmes formes que la correction fixe).
+BancBandes construireFiltresDynamiques (const Reductions&, double frequenceEch) noexcept;
+double reponseDb (const BancBandes&, double frequenceHz, double frequenceEch) noexcept;
+
+// Part de chaque bande dans la zone « à garder lisible » d'un rôle : 1 dans la
+// zone, puis décroît jusqu'à 0 une demi-octave plus loin.
+Equilibre poidsZone (const Role&) noexcept;
+
+// La piste joue-t-elle dans cette bande ? 0 = non (20 dB sous son niveau habituel),
+// 1 = pleinement (à moins de 8 dB de son niveau habituel).
+float activite (float niveauDb, float refDb) noexcept;
+
+// Poids de l'écart de priorité : 0 si la piste qui demande n'est pas strictement
+// plus prioritaire, puis 0,25 par cran d'écart.
+float facteurPriorite (int prioriteQuiDemande, int prioriteQuiCede) noexcept;
+
+// Réduction (dB, <= 0) qu'une piste applique dans une bande pour une autre piste.
+float reductionBande (float poidsZone, float activite, int prioriteQuiDemande,
+                      int prioriteQuiCede, float quantite) noexcept;
 
 } // namespace rogus

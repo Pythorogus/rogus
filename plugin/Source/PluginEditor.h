@@ -30,6 +30,7 @@ public:
 private:
     void timerCallback() override;
     juce::String texteEtat() const;
+    juce::String texteDemasquage() const;
 
     RogusProcessor& moteur;
 
@@ -39,6 +40,12 @@ private:
     juce::ToggleButton boutonActif { "Correction fixe" };
     juce::Slider curseurQuantite;
     juce::TextButton boutonEcoute;
+
+    // Démasquage dynamique (étape 3)
+    juce::Label etatDemasquage, etiquetteDemQuantite, etiquettePriorite, etiquetteReactivite;
+    juce::ToggleButton boutonDemasquage;
+    juce::Slider curseurDemQuantite, curseurReactivite;
+    juce::ComboBox choixPriorite;
 
     // Les « attaches » relient un contrôle à un paramètre dans les deux sens :
     // bouger le contrôle change le paramètre, et une automation de l'hôte fait
@@ -50,6 +57,9 @@ private:
     std::unique_ptr<AttacheChoix> attacheRole, attacheSource, attacheSon;
     std::unique_ptr<AttacheBouton> attacheActif;
     std::unique_ptr<AttacheCurseur> attacheQuantite;
+    std::unique_ptr<AttacheChoix> attachePriorite;
+    std::unique_ptr<AttacheBouton> attacheDemasquage;
+    std::unique_ptr<AttacheCurseur> attacheDemQuantite, attacheReactivite;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (RogusEditor)
 };

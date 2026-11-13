@@ -97,6 +97,20 @@ RogusProcessor::RogusProcessor()
     paramSon      = parametres.getRawParameterValue (IdParam::son);
     paramActif    = parametres.getRawParameterValue (IdParam::correctionActive);
     paramQuantite = parametres.getRawParameterValue (IdParam::quantite);
+    paramPriorite    = parametres.getRawParameterValue (IdParam::priorite);
+    paramDemasquage  = parametres.getRawParameterValue (IdParam::demasquageActif);
+    paramDemQuantite = parametres.getRawParameterValue (IdParam::demasquageQuantite);
+    paramReactivite  = parametres.getRawParameterValue (IdParam::reactivite);
+
+    // La zone « à garder lisible » de chaque rôle, traduite une fois en poids par bande.
+    for (int i = 0; i < rogus::nbRoles; ++i)
+        zonesRoles[(size_t) i] = rogus::poidsZone (rogus::role (i));
+
+    for (auto& r : reductionsVues)
+        r.store (0.0f);
+
+    // Cette instance prend sa place dans l'orchestre : les autres pistes la voient.
+    annonce = rogus::Orchestre::instance().inscrire();
 
     // Toute la mémoire de l'analyse est réservée ici, une fois pour toutes.
     anneau.assign ((size_t) rogus::tailleFft, 0.0f);
@@ -111,6 +125,7 @@ RogusProcessor::RogusProcessor()
 RogusProcessor::~RogusProcessor()
 {
     stopTimer();
+    rogus::Orchestre::instance().retirer (annonce);      // les autres pistes ne la verront plus
 }
 
 juce::AudioProcessorValueTreeState::ParameterLayout RogusProcessor::creerParametres()
@@ -134,6 +149,27 @@ juce::AudioProcessorValueTreeState::ParameterLayout RogusProcessor::creerParamet
     disposition.add (std::make_unique<juce::AudioParameterFloat> (
         juce::ParameterID { IdParam::quantite, 1 }, rogus::fr ("Quantité"),
         juce::NormalisableRange<float> (0.0f, 100.0f, 1.0f), 60.0f,
+        juce::AudioParameterFloatAttributes().withLabel ("%")));
+
+    // --- Étape 3 : démasquage dynamique. Paramètres ajoutés à la suite des
+    //     précédents ; un ancien projet les reçoit à leur valeur par défaut. ---
+
+    // « Auto » = la priorité habituelle du rôle. Sinon de 1 (fond) à 5 (devant).
+    disposition.add (std::make_unique<juce::AudioParameterChoice> (
+        juce::ParameterID { IdParam::priorite, 1 }, rogus::fr ("Priorité"),
+        juce::StringArray { "Auto", "1", "2", "3", "4", "5" }, 0));
+
+    disposition.add (std::make_unique<juce::AudioParameterBool> (
+        juce::ParameterID { IdParam::demasquageActif, 1 }, rogus::fr ("Démasquage"), true));
+
+    disposition.add (std::make_unique<juce::AudioParameterFloat> (
+        juce::ParameterID { IdParam::demasquageQuantite, 1 }, rogus::fr ("Quantité du démasquage"),
+        juce::NormalisableRange<float> (0.0f, 100.0f, 1.0f), 50.0f,
+        juce::AudioParameterFloatAttributes().withLabel ("%")));
+
+    disposition.add (std::make_unique<juce::AudioParameterFloat> (
+        juce::ParameterID { IdParam::reactivite, 1 }, rogus::fr ("Réactivité"),
+        juce::NormalisableRange<float> (0.0f, 100.0f, 1.0f), 50.0f,
         juce::AudioParameterFloatAttributes().withLabel ("%")));
 
     return disposition;
@@ -166,6 +202,33 @@ int RogusProcessor::cleConfig() const noexcept
 float RogusProcessor::lireQuantiteEffective() const noexcept
 {
     return paramActif->load() > 0.5f ? juce::jlimit (0.0f, 1.0f, paramQuantite->load() * 0.01f) : 0.0f;
+}
+
+int RogusProcessor::lirePriorite() const noexcept
+{
+    // Choix 0 = « Auto » : la priorité habituelle du rôle. Choix 1 à 5 = la priorité elle-même.
+    const int choix = juce::jlimit (0, 5, juce::roundToInt (paramPriorite->load()));
+    return choix == 0 ? rogus::role (lireRole()).priorite : choix;
+}
+
+bool RogusProcessor::lireDemasquageActif() const noexcept
+{
+    return paramDemasquage->load() > 0.5f;
+}
+
+rogus::Reductions RogusProcessor::lireReductions() const noexcept
+{
+    rogus::Reductions r {};
+
+    for (size_t b = 0; b < (size_t) rogus::nbBandes; ++b)
+        r[b] = reductionsVues[b].load();
+
+    return r;
+}
+
+int RogusProcessor::nbPistesConnectees() const noexcept
+{
+    return rogus::Orchestre::instance().nbInstances();
 }
 
 rogus::Correction RogusProcessor::lireCorrection() const
@@ -212,8 +275,18 @@ void RogusProcessor::mettreAJour()
     // spectre accumulé, on peut le lire sans risque.
     if (analysePrete.exchange (false))
     {
-        const auto nouvelleMesure = rogus::analyser (sommeSpectre, frequenceEchPartagee.load(),
-                                                     &compteursBosses, trames);
+        auto nouvelleMesure = rogus::analyser (sommeSpectre, frequenceEchPartagee.load(),
+                                               &compteursBosses, trames);
+
+        // Repère de niveau pour le démasquage : niveau moyen de chaque bande
+        // pendant que la piste jouait (les ticks de silence n'ont pas été comptés).
+        if (nouvelleMesure.valide && nbTicksRef > 0)
+        {
+            nouvelleMesure.refValide = true;
+
+            for (size_t b = 0; b < (size_t) rogus::nbBandes; ++b)
+                nouvelleMesure.refDb[b] = (float) (10.0 * std::log10 (sommeRef[b] / nbTicksRef + 1.0e-20));
+        }
 
         if (nouvelleMesure.valide)
         {
@@ -269,6 +342,20 @@ void RogusProcessor::prepareToPlay (double frequenceEchantillonnage, int)
     banc = rogus::construireFiltres (lissee, frequenceEch);
     memoire = {};
     filtresNeutres = lireQuantiteEffective() <= 0.0f;
+
+    // Démasquage : on repart d'un état vierge.
+    filtresAnalyse = rogus::construireFiltresAnalyse (frequenceEch);
+    memoireAnalyse = {};
+    energieTick = {};
+    nbEchTick = 0;
+    positionAttendue = -1;
+    compteurHorloge = 0;
+    reductionLissee = {};
+    reductionFiltres = {};
+    dernierTickLu = -1;
+    filtresDyn = rogus::construireFiltresDynamiques (reductionLissee, frequenceEch);
+    memoireDyn = {};
+    dynNeutre = true;
 }
 
 bool RogusProcessor::isBusesLayoutSupported (const BusesLayout& disposition) const
@@ -327,6 +414,23 @@ void RogusProcessor::processBlock (juce::AudioBuffer<float>& tampon, juce::MidiB
 
     adopterCorrection (false);
 
+    // --- Orchestration : on mesure ce que joue cette piste (avant toute
+    //     correction), on l'annonce aux autres, et on regarde ce qu'elles jouent. ---
+    const bool demasquage = lireDemasquageActif();
+    const auto position = positionDuBloc (nbEch);
+
+    if (annonce != nullptr)
+    {
+        annonce->role.store (lireRole());
+        annonce->priorite.store (lirePriorite());
+        annonce->synchroHote.store (position.hote);
+        annonce->participe.store (demasquage);
+    }
+
+    synchroHoteVue.store (position.hote);
+    analyserBandes (tampon, nbCanaux, position);
+    calculerDemasquage (demasquage, position, nbEch);
+
     // --- Glissement des réglages vers leur cible ---
     // Un saut brutal des coefficients d'un filtre s'entend comme un « clic » :
     // chaque valeur se rapproche de sa cible un peu à chaque bloc.
@@ -358,6 +462,8 @@ void RogusProcessor::processBlock (juce::AudioBuffer<float>& tampon, juce::MidiB
     for (size_t i = 0; i < (size_t) rogus::nbBandes; ++i)
         glisser (lissee.gains[i], voulue.gains[i], 0.005f);
 
+    glisser (lissee.compensationDb, voulue.compensationDb, 0.005f);
+
     // Les résonances changent de fréquence d'un coup (rare : fin d'une écoute),
     // mais leur gain glisse comme le reste.
     if (lissee.nbRes != voulue.nbRes || lissee.resHz != voulue.resHz)
@@ -373,46 +479,316 @@ void RogusProcessor::processBlock (juce::AudioBuffer<float>& tampon, juce::MidiB
     if (change)
         banc = rogus::construireFiltres (lissee, frequenceEch);
 
-    // --- Correction désactivée ou quantité à zéro : le son passe intact ---
+    // Un filtre du 2e ordre appliqué sur place à un canal.
+    auto filtrer = [nbEch] (float* donnees, const rogus::Coefs& c, std::array<double, 2>& etat)
+    {
+        double z1 = etat[0], z2 = etat[1];
+
+        for (int n = 0; n < nbEch; ++n)
+        {
+            const double x = donnees[n];
+            const double y = c.b0 * x + z1;
+            z1 = c.b1 * x - c.a1 * y + z2;
+            z2 = c.b2 * x - c.a2 * y;
+            donnees[n] = (float) y;
+        }
+
+        etat[0] = z1;
+        etat[1] = z2;
+    };
+
+    // --- Couche 1 : correction fixe ---
+    // Désactivée ou quantité à zéro : cette couche laisse passer le son intact.
     if (quantite <= 0.0f && ! change)
     {
         filtresNeutres = true;
+    }
+    else
+    {
+        // À la remise en route, la mémoire des filtres contient encore le son
+        // d'avant la coupure : on la vide pour éviter un « clic ».
+        if (filtresNeutres)
+        {
+            memoire = {};
+            filtresNeutres = false;
+        }
+
+        const int nbActifs = 1 + rogus::nbBandes + lissee.nbRes;
+
+        for (int canal = 0; canal < nbCanaux; ++canal)
+            for (int f = 0; f < nbActifs; ++f)
+                filtrer (tampon.getWritePointer (canal), banc[(size_t) f], memoire[(size_t) canal][(size_t) f]);
+    }
+
+    // --- Couche 2 : démasquage dynamique ---
+    // Les filtres ne sont recalculés que si la réduction a bougé de façon audible.
+    float reductionMax = 0.0f, ecartMax = 0.0f;
+
+    for (size_t b = 0; b < (size_t) rogus::nbBandes; ++b)
+    {
+        reductionMax = juce::jmax (reductionMax, std::abs (reductionLissee[b]));
+        ecartMax = juce::jmax (ecartMax, std::abs (reductionLissee[b] - reductionFiltres[b]));
+    }
+
+    // Couche à l'arrêt et réduction revenue à zéro : le son passe intact.
+    if (! demasquage && reductionMax < 0.01f)
+    {
+        reductionLissee = {};
+        dynNeutre = true;
+    }
+    else
+    {
+        if (dynNeutre)
+        {
+            memoireDyn = {};
+            reductionFiltres = reductionLissee;
+            filtresDyn = rogus::construireFiltresDynamiques (reductionFiltres, frequenceEch);
+            dynNeutre = false;
+        }
+        else if (ecartMax > 0.02f)
+        {
+            reductionFiltres = reductionLissee;
+            filtresDyn = rogus::construireFiltresDynamiques (reductionFiltres, frequenceEch);
+        }
+
+        for (int canal = 0; canal < nbCanaux; ++canal)
+            for (int b = 0; b < rogus::nbBandes; ++b)
+                filtrer (tampon.getWritePointer (canal), filtresDyn[(size_t) b], memoireDyn[(size_t) canal][(size_t) b]);
+    }
+
+    for (size_t b = 0; b < (size_t) rogus::nbBandes; ++b)
+        reductionsVues[b].store (dynNeutre ? 0.0f : reductionLissee[b]);
+}
+
+// --- Orchestration (fil audio) -----------------------------------------------
+
+RogusProcessor::PositionBloc RogusProcessor::positionDuBloc (int nbEch) noexcept
+{
+    // On numérote le temps d'après la position de lecture de l'hôte : deux
+    // instances qui traitent le même moment du morceau s'accordent ainsi sur
+    // le tick, à l'écoute comme à l'export. Si l'hôte ne la donne pas (ou si la
+    // lecture est arrêtée), on se rabat sur un simple compteur.
+    PositionBloc p;
+
+    if (auto* tete = getPlayHead())
+    {
+        const auto info = tete->getPosition();
+
+        if (info.hasValue() && info->getIsPlaying())
+        {
+            const auto temps = info->getTimeInSamples();
+
+            if (temps.hasValue() && *temps >= 0)
+            {
+                p.debut = *temps;
+                p.hote = true;
+            }
+        }
+    }
+
+    if (! p.hote)
+        p.debut = compteurHorloge;
+
+    compteurHorloge += nbEch;
+    return p;
+}
+
+void RogusProcessor::analyserBandes (const juce::AudioBuffer<float>& tampon, int nbCanaux, const PositionBloc& pos) noexcept
+{
+    // Un saut de position (déplacement dans le morceau, boucle, démarrage de
+    // la lecture) : le tick en cours est incomplet, on repart d'un tick vide.
+    if (pos.hote != dernierModeHote || (pos.hote && positionAttendue >= 0 && pos.debut != positionAttendue))
+    {
+        energieTick = {};
+        nbEchTick = 0;
+    }
+
+    dernierModeHote = pos.hote;
+
+    const int nbEch = tampon.getNumSamples();
+    const float* gauche = tampon.getReadPointer (0);
+    const float* droite = tampon.getReadPointer (nbCanaux > 1 ? 1 : 0);
+    std::int64_t position = pos.debut;
+
+    for (int n = 0; n < nbEch; ++n)
+    {
+        const double x = 0.5 * ((double) gauche[n] + (double) droite[n]);
+
+        // Sept passe-bande : l'énergie de la piste dans chaque bande.
+        for (size_t b = 0; b < (size_t) rogus::nbBandes; ++b)
+        {
+            const auto& c = filtresAnalyse[b];
+            auto& etat = memoireAnalyse[b];
+            const double y = c.b0 * x + etat[0];
+            etat[0] = c.b1 * x - c.a1 * y + etat[1];
+            etat[1] = c.b2 * x - c.a2 * y;
+            energieTick[b] += y * y;
+        }
+
+        ++nbEchTick;
+        ++position;
+
+        // Fin d'un tick : sa position est un multiple de 1024.
+        if ((position & (rogus::tailleTick - 1)) == 0)
+        {
+            finirTick (position / rogus::tailleTick - 1);
+            energieTick = {};
+            nbEchTick = 0;
+        }
+    }
+
+    positionAttendue = pos.hote ? position : -1;
+}
+
+void RogusProcessor::finirTick (std::int64_t tick) noexcept
+{
+    std::array<double, rogus::nbBandes> puissance {};
+    double total = 0.0;
+
+    for (size_t b = 0; b < (size_t) rogus::nbBandes; ++b)
+    {
+        puissance[b] = energieTick[b] / juce::jmax (1, nbEchTick);
+        total += puissance[b];
+    }
+
+    // Pendant une écoute : on retient le niveau moyen de chaque bande, en
+    // ignorant les silences (même seuil que pour le spectre : -50 dBFS).
+    if (ecoute && total > (double) seuilSilence * seuilSilence)
+    {
+        for (size_t b = 0; b < (size_t) rogus::nbBandes; ++b)
+            sommeRef[b] += puissance[b];
+
+        ++nbTicksRef;
+    }
+
+    if (annonce == nullptr)
+        return;
+
+    // Ce qu'on annonce aux autres : pour chaque bande, la piste joue-t-elle,
+    // par rapport à son propre niveau habituel ? Sans écoute, on ne sait pas
+    // ce qu'est son niveau habituel : elle n'annonce rien et ne demande donc
+    // aucune place.
+    rogus::Activites activites {};
+
+    if (cible.refValide)
+        for (size_t b = 0; b < (size_t) rogus::nbBandes; ++b)
+            activites[b] = rogus::activite ((float) (10.0 * std::log10 (puissance[b] + 1.0e-20)), cible.refDb[b]);
+
+    annonce->publier (tick, activites, juce::Time::getMillisecondCounter());
+}
+
+void RogusProcessor::lireAutresPistes (std::int64_t tick, bool tickPrecis, float quantite, int maPriorite,
+                                       rogus::Reductions& visee, int& roleLePlusFort) const noexcept
+{
+    visee = {};
+    roleLePlusFort = -1;
+    float plusForte = 0.0f;
+    const auto maintenant = juce::Time::getMillisecondCounter();
+    auto& orchestre = rogus::Orchestre::instance();
+
+    for (int i = 0; i < rogus::nbInstancesMax; ++i)
+    {
+        const auto& autre = orchestre.place (i);
+
+        if (&autre == annonce || ! autre.utilisee.load() || ! autre.participe.load())
+            continue;
+
+        // Seule une piste strictement plus prioritaire peut demander de la place.
+        const int saPriorite = autre.priorite.load();
+
+        if (saPriorite <= maPriorite)
+            continue;
+
+        // Même tick pour tout le monde quand l'hôte donne la position ; sinon,
+        // la dernière annonce de l'autre piste.
+        rogus::Activites activites {};
+        const bool lu = (tickPrecis && autre.synchroHote.load()) ? autre.lire (tick, activites)
+                                                                 : autre.lireDernier (activites, maintenant);
+        if (! lu)
+            continue;
+
+        const auto& zone = zonesRoles[(size_t) juce::jlimit (0, rogus::nbRoles - 1, autre.role.load())];
+
+        for (size_t b = 0; b < (size_t) rogus::nbBandes; ++b)
+        {
+            const float r = rogus::reductionBande (zone[b], activites[b], saPriorite, maPriorite, quantite);
+
+            // Plusieurs pistes peuvent demander la même bande : on ne cumule pas,
+            // on garde la demande la plus forte.
+            visee[b] = juce::jmin (visee[b], r);
+
+            if (r < plusForte)
+            {
+                plusForte = r;
+                roleLePlusFort = autre.role.load();
+            }
+        }
+    }
+}
+
+void RogusProcessor::calculerDemasquage (bool actif, const PositionBloc& pos, int nbEch) noexcept
+{
+    // Réactivité : à 0 % la réduction s'installe et repart lentement (discret),
+    // à 100 % elle suit de près ce que jouent les autres (plus efficace, plus audible).
+    const double r = juce::jlimit (0.0, 1.0, (double) paramReactivite->load() * 0.01);
+    const double tempsAttaque  = 0.200 + (0.015 - 0.200) * r;
+    const double tempsRelache  = 0.800 + (0.080 - 0.800) * r;
+
+    auto avancer = [&] (const rogus::Reductions& visee, double duree)
+    {
+        for (size_t b = 0; b < (size_t) rogus::nbBandes; ++b)
+        {
+            // Baisser davantage = attaque (rapide) ; revenir = relâchement (plus lent).
+            const double temps = visee[b] < reductionLissee[b] ? tempsAttaque : tempsRelache;
+            reductionLissee[b] += (visee[b] - reductionLissee[b]) * (float) (1.0 - std::exp (-duree / temps));
+        }
+    };
+
+    rogus::Reductions visee {};
+    int role = -1;
+
+    if (! actif)
+    {
+        // Couche à l'arrêt : la réduction revient doucement à zéro.
+        avancer (visee, (double) nbEch / frequenceEch);
+        dernierTickLu = -1;
+        roleDominant.store (-1);
         return;
     }
 
-    // À la remise en route, la mémoire des filtres contient encore le son
-    // d'avant la coupure : on la vide pour éviter un « clic ».
-    if (filtresNeutres)
+    const float quantite = juce::jlimit (0.0f, 1.0f, paramDemQuantite->load() * 0.01f);
+    const int maPriorite = lirePriorite();
+
+    if (pos.hote)
     {
-        memoire = {};
-        filtresNeutres = false;
-    }
+        // On lit le dernier tick forcément terminé chez toutes les instances :
+        // celui qui précède le début de ce bloc. Peu importe alors dans quel
+        // ordre l'hôte traite les pistes : le résultat est le même.
+        const std::int64_t tickLisible = pos.debut / rogus::tailleTick - 1;
 
-    // --- Filtrage ---
-    const int nbActifs = 1 + rogus::nbBandes + lissee.nbRes;
-
-    for (int canal = 0; canal < nbCanaux; ++canal)
-    {
-        float* donnees = tampon.getWritePointer (canal);
-
-        for (int f = 0; f < nbActifs; ++f)
+        // Saut dans le morceau : on repart de zéro plutôt que de rattraper.
+        if (tickLisible < dernierTickLu || tickLisible - dernierTickLu > 64)
         {
-            const auto& c = banc[(size_t) f];
-            double z1 = memoire[(size_t) canal][(size_t) f][0];
-            double z2 = memoire[(size_t) canal][(size_t) f][1];
-
-            for (int n = 0; n < nbEch; ++n)
-            {
-                const double x = donnees[n];
-                const double y = c.b0 * x + z1;
-                z1 = c.b1 * x - c.a1 * y + z2;
-                z2 = c.b2 * x - c.a2 * y;
-                donnees[n] = (float) y;
-            }
-
-            memoire[(size_t) canal][(size_t) f][0] = z1;
-            memoire[(size_t) canal][(size_t) f][1] = z2;
+            dernierTickLu = tickLisible - 1;
+            reductionLissee = {};
         }
+
+        // On avance tick par tick (et non bloc par bloc) : la réduction ne
+        // dépend ainsi pas de la taille des blocs choisie par l'hôte.
+        for (std::int64_t t = dernierTickLu + 1; t <= tickLisible; ++t)
+        {
+            lireAutresPistes (t, true, quantite, maPriorite, visee, role);
+            avancer (visee, (double) rogus::tailleTick / frequenceEch);
+            dernierTickLu = t;
+            roleDominant.store (role);
+        }
+    }
+    else
+    {
+        lireAutresPistes (-1, false, quantite, maPriorite, visee, role);
+        avancer (visee, (double) nbEch / frequenceEch);
+        dernierTickLu = -1;
+        roleDominant.store (role);
     }
 }
 
@@ -424,6 +800,8 @@ void RogusProcessor::capturer (const juce::AudioBuffer<float>& tampon, int nbCan
     {
         std::fill (sommeSpectre.begin(), sommeSpectre.end(), 0.0);
         compteursBosses = {};
+        sommeRef = {};
+        nbTicksRef = 0;
         std::fill (anneau.begin(), anneau.end(), 0.0f);
         indexEcriture = depuisDerniereTrame = echantillonsRecus = trames = 0;
         analysePrete.store (false);
@@ -545,6 +923,12 @@ void RogusProcessor::getStateInformation (juce::MemoryBlock& destination)
             noeud.setProperty ("resExces" + juce::String (i), m.resExces[(size_t) i], nullptr);
         }
 
+        // Repère de niveau du démasquage (étape 3). Champs ajoutés sans changer
+        // les anciens : une version précédente du plugin les ignore simplement.
+        if (m.refValide)
+            for (int i = 0; i < rogus::nbBandes; ++i)
+                noeud.setProperty ("ref" + juce::String (i), m.refDb[(size_t) i], nullptr);
+
         etat.appendChild (noeud, nullptr);
     }
 
@@ -577,6 +961,15 @@ void RogusProcessor::setStateInformation (const void* donnees, int taille)
             m.resHz[(size_t) i]    = (float) noeud.getProperty ("resHz" + juce::String (i), 1000.0f);
             m.resExces[(size_t) i] = (float) noeud.getProperty ("resExces" + juce::String (i), 0.0f);
         }
+
+        // Une écoute faite avant l'étape 3 n'a pas de repère de niveau : la
+        // correction fixe marche comme avant, mais la piste ne demandera de
+        // place aux autres qu'après une nouvelle écoute.
+        m.refValide = noeud.hasProperty ("ref0");
+
+        if (m.refValide)
+            for (int i = 0; i < rogus::nbBandes; ++i)
+                m.refDb[(size_t) i] = (float) noeud.getProperty ("ref" + juce::String (i), -100.0f);
     }
 
     // La mesure vit dans le plugin, pas dans l'arbre des paramètres.

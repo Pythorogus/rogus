@@ -40,6 +40,7 @@ juce_add_plugin(Rogus
 
 set(SOURCES_ROGUS
     Source/Correction.cpp
+    Source/Orchestre.cpp
     Source/PluginProcessor.cpp
     Source/PluginEditor.cpp
 )

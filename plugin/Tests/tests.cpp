@@ -129,6 +129,174 @@ namespace
         }
     }
 
+    // Joue du bruit filtré en bandes d'une octave (une par centre demandé) : l'énergie
+    // s'étale sur toute la bande, comme dans un vrai instrument. Des sinus purs
+    // seraient un cas bien plus dur que la musique. Renvoie la variation de niveau
+    // entre l'entrée et la sortie du plugin, en dB, mesurée sur les deux dernières
+    // secondes (le temps que les filtres se soient installés).
+    float jouerBandes (RogusProcessor& p, double secondes, const std::vector<float>& centres, float amplitude = 0.8f)
+    {
+        juce::Random hasard (42);
+        std::vector<juce::dsp::IIR::Filter<float>> filtres (centres.size());
+
+        for (size_t i = 0; i < centres.size(); ++i)
+            filtres[i].coefficients = juce::dsp::IIR::Coefficients<float>::makeBandPass (fs, centres[i], 1.4f);
+
+        juce::AudioBuffer<float> tampon (2, tailleBloc);
+        juce::MidiBuffer midi;
+        const int nbBlocs = (int) (secondes * fs / tailleBloc);
+        const int debutMesure = juce::jmax (0, nbBlocs - (int) (2.0 * fs / tailleBloc));
+        double energieEntree = 0.0, energieSortie = 0.0;
+        juce::int64 position = 0;
+
+        for (int bloc = 0; bloc < nbBlocs; ++bloc)
+        {
+            for (int n = 0; n < tailleBloc; ++n, ++position)
+            {
+                double v = 0.0;
+                for (auto& filtre : filtres)
+                    v += (double) filtre.processSample (amplitude * (hasard.nextFloat() * 2.0f - 1.0f));
+
+                if (bloc >= debutMesure)
+                    energieEntree += v * v;
+
+                tampon.setSample (0, n, (float) v);
+                tampon.setSample (1, n, (float) v);
+            }
+
+            p.processBlock (tampon, midi);
+
+            if (bloc >= debutMesure)
+                for (int n = 0; n < tailleBloc; ++n)
+                    energieSortie += (double) tampon.getSample (0, n) * (double) tampon.getSample (0, n);
+        }
+
+        return energieEntree > 0.0 ? (float) (10.0 * std::log10 (energieSortie / energieEntree + 1.0e-30)) : 0.0f;
+    }
+
+    // Une fausse « tête de lecture » : elle joue le rôle de l'hôte, qui indique
+    // au plugin où on en est dans le morceau.
+    struct TeteLecture : juce::AudioPlayHead
+    {
+        juce::int64 position = 0;
+
+        juce::Optional<PositionInfo> getPosition() const override
+        {
+            PositionInfo info;
+            info.setIsPlaying (true);
+            info.setTimeInSamples (position);
+            return info;
+        }
+    };
+
+    // Du bruit limité à quelques bandes d'octave, reproductible (même graine = même bruit).
+    struct SourceBruit
+    {
+        SourceBruit (int graine, const std::vector<float>& centres) : hasard (graine), filtres (centres.size())
+        {
+            for (size_t i = 0; i < centres.size(); ++i)
+                filtres[i].coefficients = juce::dsp::IIR::Coefficients<float>::makeBandPass (fs, centres[i], 1.4f);
+        }
+
+        float suivant()
+        {
+            float v = 0.0f;
+            for (auto& f : filtres)
+                v += f.processSample (0.8f * (hasard.nextFloat() * 2.0f - 1.0f));
+            return v;
+        }
+
+        juce::Random hasard;
+        std::vector<juce::dsp::IIR::Filter<float>> filtres;
+    };
+
+    // Deux pistes dans le même « hôte » : une voix qui chante par moments (de 2 à
+    // 4 s et de 6 à 8 s) et un lead qui joue en continu dans la même zone.
+    // On traite les deux pistes bloc par bloc, dans l'ordre demandé, et on
+    // mesure de combien le lead baisse quand la voix chante.
+    struct Duo
+    {
+        std::vector<float> sortieLead;      // tout ce que le lead a produit
+        float pendantVoix = 0.0f;           // variation de niveau du lead quand la voix chante (dB)
+        float sansVoix = 0.0f;              // ... et quand elle se tait
+        float ecartVoix = 0.0f;             // plus grand écart entre l'entrée et la sortie de la voix
+        int pistesVues = 0;
+    };
+
+    Duo jouerDuo (const juce::MemoryBlock& etatVoix, const juce::MemoryBlock& etatLead,
+                  bool voixDabord, int bloc, float choixPrioriteLead, bool avecTete = true)
+    {
+        RogusProcessor voix, lead;
+        voix.setStateInformation (etatVoix.getData(), (int) etatVoix.getSize());
+        lead.setStateInformation (etatLead.getData(), (int) etatLead.getSize());
+        choisir (lead, IdParam::priorite, choixPrioriteLead);
+
+        for (auto* p : { &voix, &lead })
+        {
+            choisir (*p, IdParam::demasquageQuantite, 100.0f);
+            choisir (*p, IdParam::reactivite, 100.0f);
+            p->setRateAndBufferSizeDetails (fs, bloc);
+            p->prepareToPlay (fs, bloc);
+        }
+
+        TeteLecture tete;
+        if (avecTete)
+        {
+            voix.setPlayHead (&tete);
+            lead.setPlayHead (&tete);
+        }
+
+        SourceBruit bruitVoix (7, { 1600.0f, 3200.0f }), bruitLead (11, { 1600.0f });
+        juce::AudioBuffer<float> tamponVoix (2, bloc), tamponLead (2, bloc);
+        std::vector<float> entreeLead ((size_t) bloc);
+        juce::MidiBuffer midi;
+        Duo d;
+        double eOn = 0, sOn = 0, eOff = 0, sOff = 0;
+
+        for (juce::int64 debut = 0; debut < (juce::int64) (9.0 * fs); debut += bloc)
+        {
+            tete.position = debut;
+
+            for (int n = 0; n < bloc; ++n)
+            {
+                const double t = (double) (debut + n) / fs;
+                const bool chante = (t >= 2.0 && t < 4.0) || (t >= 6.0 && t < 8.0);
+                const float v = bruitVoix.suivant() * (chante ? 1.0f : 0.0f);
+                const float l = bruitLead.suivant();
+                tamponVoix.setSample (0, n, v);
+                tamponVoix.setSample (1, n, v);
+                tamponLead.setSample (0, n, l);
+                tamponLead.setSample (1, n, l);
+                entreeLead[(size_t) n] = l;
+
+                // La voix ne doit jamais être modifiée : on garde son entrée pour comparer.
+                tamponVoix.setSample (1, n, v);
+            }
+
+            juce::AudioBuffer<float> entreeVoix;
+            entreeVoix.makeCopyOf (tamponVoix);
+
+            if (voixDabord) { voix.processBlock (tamponVoix, midi); lead.processBlock (tamponLead, midi); }
+            else            { lead.processBlock (tamponLead, midi); voix.processBlock (tamponVoix, midi); }
+
+            for (int n = 0; n < bloc; ++n)
+            {
+                const double t = (double) (debut + n) / fs;
+                const double e = entreeLead[(size_t) n], s = tamponLead.getSample (0, n);
+                d.sortieLead.push_back ((float) s);
+                d.ecartVoix = juce::jmax (d.ecartVoix, std::abs (tamponVoix.getSample (0, n) - entreeVoix.getSample (0, n)));
+
+                if (t >= 2.6 && t < 3.9) { eOn += e * e;  sOn += s * s; }
+                if (t >= 5.0 && t < 5.9) { eOff += e * e; sOff += s * s; }
+            }
+        }
+
+        d.pendantVoix = (float) (10.0 * std::log10 (sOn / eOn + 1.0e-30));
+        d.sansVoix    = (float) (10.0 * std::log10 (sOff / eOff + 1.0e-30));
+        d.pistesVues  = lead.nbPistesConnectees();
+        return d;
+    }
+
     // Donne accès aux fonctions statiques de lecture et d'écriture de l'état,
     // pour fabriquer de faux projets enregistrés par d'anciennes versions.
     struct Outils : RogusProcessor
@@ -254,6 +422,51 @@ int main()
                   "lead + synthe : coupe-bas du role (100 Hz) car plus haut que celui de la source (25 Hz)");
         verifier (rogus::calculerCorrection (rogus::role (3), rogus::source (0), rogus::son (0), {}).coupeBasHz == 70.0f,
                   "basse + guitare electrique : coupe-bas de la source (70 Hz) car plus haut que celui du role (30 Hz)");
+
+        // On ne monte jamais le grave sous la zone utile de l'instrument : pour une
+        // guitare (coupe-bas a 80 Hz), la bande de 100 Hz ne contient presque que
+        // de la ronflette. Cas vu chez Pierre : +5,5 dB vers 60 Hz sur une guitare claire.
+        {
+            const auto& rythmique = rogus::role (1);
+            rogus::Mesure maigre;
+            maigre.valide = true;
+            for (int i = 0; i < rogus::nbBandes; ++i)
+                maigre.niveaux[(size_t) i] = rythmique.cible[(size_t) i] - 20.0f;
+            maigre.niveaux[0] -= 15.0f;       // tres peu de grave par rapport a la cible
+
+            // On regarde la courbe telle que Pierre la voit (compensation de volume
+            // comprise), sans le coupe-bas qui masquerait une montee du grave.
+            auto bandesSeules = [] (rogus::Correction c)
+            {
+                c.coupeBasHz = 10.0f;
+                return rogus::construireFiltres (rogus::doser (c, 1.0f), fs);
+            };
+
+            const auto guitare = rogus::calculerCorrection (rythmique, rogus::source (0), rogus::son (0), maigre);
+            const double grave = rogus::reponseDb (bandesSeules (guitare), 60.0, fs);
+            verifier (grave <= 0.3,
+                      "guitare pauvre en grave : le grave n'est pas monte (" + juce::String (grave, 1) + " dB a 60 Hz)");
+
+            // Le cas de la capture : mediums trop forts ET grave faible. La compensation
+            // de volume remonte toute la courbe ; le grave ne doit pas en profiter.
+            rogus::Mesure mediumFort = maigre;
+            for (int i = 1; i <= 4; ++i)
+                mediumFort.niveaux[(size_t) i] += 8.0f;
+            const auto corrigee = rogus::calculerCorrection (rythmique, rogus::source (0), rogus::son (0), mediumFort);
+            const double graveFort = rogus::reponseDb (bandesSeules (corrigee), 60.0, fs);
+            verifier (graveFort <= 0.3 && rogus::doser (corrigee, 1.0f).compensationDb > 1.0f,
+                      "guitare aux mediums forts : le grave reste a 0 dB malgre la compensation de volume ("
+                      + juce::String (graveFort, 1) + " dB a 60 Hz, compensation "
+                      + juce::String (rogus::doser (corrigee, 1.0f).compensationDb, 1) + " dB)");
+
+            // Pour une basse, le grave EST la zone utile : la meme mesure doit pouvoir le remonter.
+            const auto& basse = rogus::role (3);
+            for (int i = 0; i < rogus::nbBandes; ++i)
+                maigre.niveaux[(size_t) i] = basse.cible[(size_t) i] - 20.0f;
+            maigre.niveaux[0] -= 15.0f;
+            verifier (rogus::calculerCorrection (basse, rogus::source (3), rogus::son (0), maigre).gains[0] > 2.0f,
+                      "basse pauvre en grave : le grave peut etre remonte");
+        }
 
         // La source et le son deplacent la cible : meme mesure, autres gains.
         rogus::Mesure plate;
@@ -384,6 +597,181 @@ int main()
         verifier (s.ecouteEnCours() && s.progressionEcoute() == 0.0f, "silence : l'ecoute attend du son");
     }
 
+    std::cout << "Moteur : volume conserve" << std::endl;
+    {
+        // La correction change la forme du spectre, pas le volume de la piste.
+        // On ecoute du bruit en bandes d'octave concentre dans quelques bandes
+        // (un cas plus dur que la musique, ou l'energie est plus etalee), puis
+        // on compare le niveau de sortie a celui d'entree. Source Synthe : sans
+        // recherche de resonances, qui ajouterait des encoches etroites.
+        struct Cas { const char* nom; int role; std::vector<float> centres; };
+        const Cas cas[] = {
+            { "lead, bandes 200 Hz + 3,2 kHz",              0, { 200.0f, 3200.0f } },
+            { "rythmique, bandes 100 + 400 + 1600 Hz",      1, { 100.0f, 400.0f, 1600.0f } },
+            { "voix, bandes 400 Hz + 1,6 kHz + 6,4 kHz",    7, { 400.0f, 1600.0f, 6400.0f } },
+        };
+
+        for (const auto& c : cas)
+        {
+            RogusProcessor p;
+            preparer (p);
+            choisir (p, IdParam::role, (float) c.role);
+            choisir (p, IdParam::source, 5.0f);        // Synthe
+            choisir (p, IdParam::quantite, 100.0f);
+
+            p.demarrerEcoute();
+            jouerBandes (p, 11.0, c.centres);
+            p.mettreAJour();
+            const float variation = jouerBandes (p, 4.0, c.centres);
+            const auto dosee = rogus::doser (p.lireCorrection(), 1.0f);
+
+            verifier (p.lireMesure().valide && std::abs (variation) < 0.5f,
+                      juce::String ("volume conserve a 0,5 dB pres : ") + c.nom + " (variation " + juce::String (variation, 2)
+                      + " dB, compensation " + juce::String (dosee.compensationDb, 2) + " dB)");
+        }
+    }
+
+    std::cout << "Demasquage : briques de calcul" << std::endl;
+    {
+        const auto zoneVoix = rogus::poidsZone (rogus::role (7));       // voix : 1 a 5 kHz
+        verifier (zoneVoix[4] == 1.0f && zoneVoix[5] == 1.0f && zoneVoix[2] == 0.0f && zoneVoix[3] > 0.2f && zoneVoix[3] < 0.5f,
+                  "zone de la voix : pleine a 1,6 et 3,2 kHz, partielle a 800 Hz, nulle a 400 Hz");
+        verifier (rogus::poidsZone (rogus::role (4))[0] == 1.0f && rogus::poidsZone (rogus::role (4))[1] == 0.0f,
+                  "zone du kick : la bande de 100 Hz seulement");
+
+        verifier (rogus::facteurPriorite (5, 4) == 0.25f && rogus::facteurPriorite (5, 1) == 1.0f
+                  && rogus::facteurPriorite (4, 4) == 0.0f && rogus::facteurPriorite (3, 5) == 0.0f,
+                  "priorite : seule une piste strictement plus prioritaire demande de la place");
+
+        verifier (rogus::activite (-40.0f, -20.0f) == 0.0f && rogus::activite (-28.0f, -20.0f) == 1.0f
+                  && std::abs (rogus::activite (-34.0f, -20.0f) - 0.5f) < 0.01f,
+                  "activite : 0 a 20 dB sous le niveau habituel, 1 a moins de 8 dB");
+
+        verifier (rogus::reductionBande (1.0f, 1.0f, 5, 1, 1.0f) == -6.0f && rogus::reductionBande (1.0f, 0.0f, 5, 1, 1.0f) == 0.0f
+                  && rogus::reductionBande (0.0f, 1.0f, 5, 1, 1.0f) == 0.0f && rogus::reductionBande (1.0f, 1.0f, 5, 1, 0.0f) == 0.0f,
+                  "reduction : -6 dB au maximum, nulle sans activite, hors zone ou a quantite 0");
+
+        verifier (rogus::role (4).priorite > rogus::role (3).priorite && rogus::role (7).priorite > rogus::role (0).priorite
+                  && rogus::role (8).priorite == 1,
+                  "priorites par defaut : kick devant basse, voix devant lead, nappe au fond");
+
+        rogus::Reductions creux {};
+        creux[4] = -4.0f;
+        const auto filtres = rogus::construireFiltresDynamiques (creux, fs);
+        verifier (std::abs (rogus::reponseDb (filtres, 1600.0, fs) + 4.0) < 0.2 && std::abs (rogus::reponseDb (filtres, 200.0, fs)) < 0.3,
+                  "filtres dynamiques : -4 dB a 1,6 kHz, presque rien a 200 Hz");
+    }
+
+    std::cout << "Orchestre" << std::endl;
+    {
+        auto& orchestre = rogus::Orchestre::instance();
+        const int avant = orchestre.nbInstances();
+        {
+            RogusProcessor a, b;
+            verifier (orchestre.nbInstances() == avant + 2 && a.nbPistesConnectees() == avant + 2,
+                      "deux instances du plugin se voient dans le meme programme");
+        }
+        verifier (orchestre.nbInstances() == avant, "une instance supprimee quitte l'orchestre");
+
+        auto* annonce = orchestre.inscrire();
+        rogus::Activites ecrites {}, lues {};
+        ecrites[2] = 0.7f;
+        annonce->publier (1000, ecrites, 5000u);
+        verifier (annonce->lire (1000, lues) && lues[2] == 0.7f && ! annonce->lire (999, lues) && ! annonce->lire (1000 + rogus::nbTicks, lues),
+                  "annonce : on relit le tick publie, et seulement lui");
+        verifier (annonce->lireDernier (lues, 5100u) && ! annonce->lireDernier (lues, 5400u),
+                  "annonce : la derniere valeur n'est plus prise en compte apres un quart de seconde");
+        orchestre.retirer (annonce);
+    }
+
+    std::cout << "Demasquage : deux pistes" << std::endl;
+    {
+        // Chaque piste ecoute d'abord son propre son, comme dans FL Studio.
+        auto preparerPiste = [] (int role, int graine, const std::vector<float>& centres)
+        {
+            RogusProcessor p;
+            preparer (p);
+            choisir (p, IdParam::role, (float) role);
+            choisir (p, IdParam::source, 5.0f);              // Synthe
+            choisir (p, IdParam::correctionActive, 0.0f);    // on isole le demasquage
+            p.demarrerEcoute();
+
+            SourceBruit bruit (graine, centres);
+            juce::AudioBuffer<float> tampon (2, tailleBloc);
+            juce::MidiBuffer midi;
+
+            for (int bloc = 0; bloc < (int) (11.0 * fs / tailleBloc); ++bloc)
+            {
+                for (int n = 0; n < tailleBloc; ++n)
+                {
+                    const float v = bruit.suivant();
+                    tampon.setSample (0, n, v);
+                    tampon.setSample (1, n, v);
+                }
+                p.processBlock (tampon, midi);
+            }
+
+            p.mettreAJour();
+            juce::MemoryBlock etat;
+            p.getStateInformation (etat);
+            return std::pair<juce::MemoryBlock, bool> (etat, p.lireMesure().refValide);
+        };
+
+        const auto [etatVoix, refVoix] = preparerPiste (7, 7, { 1600.0f, 3200.0f });
+        const auto [etatLead, refLead] = preparerPiste (0, 11, { 1600.0f });
+        verifier (refVoix && refLead, "ecoute : le repere de niveau du demasquage est enregistre");
+
+        // Priorite du lead reglee sur 1 (choix n. 1) : ecart maximal avec la voix (5).
+        const auto fort = jouerDuo (etatVoix, etatLead, true, 512, 1.0f);
+        verifier (fort.pistesVues >= 2, "les deux pistes se voient (" + juce::String (fort.pistesVues) + ")");
+        verifier (fort.pendantVoix < -3.0f && fort.sansVoix > -0.3f,
+                  "lead priorite 1 : baisse quand la voix chante (" + juce::String (fort.pendantVoix, 1)
+                  + " dB), revient quand elle se tait (" + juce::String (fort.sansVoix, 1) + " dB)");
+        verifier (fort.ecartVoix == 0.0f, "la voix, plus prioritaire, n'est jamais modifiee");
+
+        // Priorite automatique : lead = 4, voix = 5, un seul cran d'ecart.
+        const auto leger = jouerDuo (etatVoix, etatLead, true, 512, 0.0f);
+        verifier (leger.pendantVoix < -0.5f && leger.pendantVoix > fort.pendantVoix + 1.5f,
+                  "lead priorite auto (4) : baisse plus legere (" + juce::String (leger.pendantVoix, 1) + " dB)");
+
+        // A priorite egale, personne ne cede.
+        const auto egal = jouerDuo (etatVoix, etatLead, true, 512, 5.0f);
+        verifier (std::abs (egal.pendantVoix) < 0.05f, "lead priorite 5, comme la voix : aucune baisse ("
+                                                        + juce::String (egal.pendantVoix, 2) + " dB)");
+
+        // L'ordre dans lequel l'hote traite les pistes ne doit rien changer.
+        const auto inverse = jouerDuo (etatVoix, etatLead, false, 512, 1.0f);
+        verifier (inverse.sortieLead == fort.sortieLead, "ordre de traitement inverse : sortie identique a l'echantillon pres");
+
+        // La taille des blocs non plus (l'export utilise souvent d'autres blocs que l'ecoute).
+        const auto petitsBlocs = jouerDuo (etatVoix, etatLead, true, 256, 1.0f);
+        verifier (petitsBlocs.sortieLead == fort.sortieLead, "blocs de 256 au lieu de 512 : sortie identique a l'echantillon pres");
+
+        const auto blocsImpairs = jouerDuo (etatVoix, etatLead, true, 480, 1.0f);
+        verifier (std::abs (blocsImpairs.pendantVoix - fort.pendantVoix) < 0.1f,
+                  "blocs de 480 (non alignes sur les ticks) : meme baisse a 0,1 dB pres ("
+                  + juce::String (blocsImpairs.pendantVoix, 2) + " contre " + juce::String (fort.pendantVoix, 2) + " dB)");
+
+        // Sans position donnee par l'hote : le demasquage marche quand meme.
+        const auto sansTete = jouerDuo (etatVoix, etatLead, true, 512, 1.0f, false);
+        verifier (sansTete.pendantVoix < -3.0f && sansTete.sansVoix > -0.3f,
+                  "sans position de l'hote : meme comportement (" + juce::String (sansTete.pendantVoix, 1) + " / "
+                  + juce::String (sansTete.sansVoix, 1) + " dB)");
+
+        // Une piste sans repere de niveau (ecoute d'avant l'etape 3) ne demande rien.
+        auto xml = Outils::getXmlFromBinary (etatVoix.getData(), (int) etatVoix.getSize());
+        auto arbre = juce::ValueTree::fromXml (*xml);
+        auto mesureVoix = arbre.getChildWithName ("Mesure");
+        for (int i = 0; i < rogus::nbBandes; ++i)
+            mesureVoix.removeProperty ("ref" + juce::String (i), nullptr);
+        juce::MemoryBlock etatVoixAncien;
+        Outils::copyXmlToBinary (*arbre.createXml(), etatVoixAncien);
+
+        const auto sansRepere = jouerDuo (etatVoixAncien, etatLead, true, 512, 1.0f);
+        verifier (std::abs (sansRepere.pendantVoix) < 0.05f, "voix ecoutee avant l'etape 3 : le lead ne baisse pas ("
+                                                              + juce::String (sansRepere.pendantVoix, 2) + " dB)");
+    }
+
     std::cout << "Anciens projets" << std::endl;
     {
         // Un état réel (avec une mesure) sert de base aux faux anciens états.
@@ -451,6 +839,47 @@ int main()
         trois.setStateInformation (reecrit.getData(), (int) reecrit.getSize());
         verifier (trois.lireRole() == base.lireRole() && trois.lireSource() == base.lireSource() && trois.lireSon() == base.lireSon(),
                   "etat recent relu deux fois : role, source et son inchanges");
+
+        // Projet enregistré juste avant l'étape 3 : même version d'état, mais sans
+        // les quatre paramètres du démasquage ni le repère de niveau de l'écoute.
+        {
+            auto xml = Outils::getXmlFromBinary (actuel.getData(), (int) actuel.getSize());
+            auto etat = juce::ValueTree::fromXml (*xml);
+
+            for (int i = etat.getNumChildren() - 1; i >= 0; --i)
+            {
+                const auto id = etat.getChild (i).getProperty ("id").toString();
+
+                if (id == IdParam::priorite || id == IdParam::demasquageActif
+                    || id == IdParam::demasquageQuantite || id == IdParam::reactivite)
+                    etat.removeChild (i, nullptr);
+            }
+
+            auto noeudMesure = etat.getChildWithName ("Mesure");
+            for (int i = 0; i < rogus::nbBandes; ++i)
+                noeudMesure.removeProperty ("ref" + juce::String (i), nullptr);
+
+            fixerParametre (etat, IdParam::role, 7.0f);          // Voix
+            fixerParametre (etat, IdParam::quantite, 35.0f);
+
+            juce::MemoryBlock avantEtape3;
+            Outils::copyXmlToBinary (*etat.createXml(), avantEtape3);
+            RogusProcessor q;
+            q.setStateInformation (avantEtape3.getData(), (int) avantEtape3.getSize());
+
+            verifier (q.lireRole() == 7 && q.lireMesure().valide && ! q.lireMesure().refValide
+                      && std::abs (q.parametres.getRawParameterValue (IdParam::quantite)->load() - 35.0f) < 0.01f,
+                      "projet d'avant l'etape 3 : role, quantite et ecoute gardes (repere de niveau absent)");
+            verifier (q.lirePriorite() == 5 && q.lireDemasquageActif()
+                      && std::abs (q.parametres.getRawParameterValue (IdParam::demasquageQuantite)->load() - 50.0f) < 0.01f,
+                      "projet d'avant l'etape 3 : nouveaux reglages a leur valeur par defaut (priorite du role)");
+        }
+
+        // Le repère de niveau survit à un enregistrement.
+        RogusProcessor relu;
+        relu.setStateInformation (actuel.getData(), (int) actuel.getSize());
+        verifier (base.lireMesure().refValide && relu.lireMesure().refValide && relu.lireMesure().refDb == base.lireMesure().refDb,
+                  "sauvegarde : repere de niveau du demasquage retrouve");
     }
 
     std::cout << std::endl << (nbEchecs == 0 ? "Tous les tests passent." : "Tests en echec : " + juce::String (nbEchecs)) << std::endl;

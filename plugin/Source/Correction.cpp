@@ -18,31 +18,34 @@ namespace
     // ATTENTION : ce sont des points de départ raisonnables, pas des vérités.
     // Ils sont à affiner à l'oreille sur les prises de Pierre.
     // Rôles : la fonction de la piste dans le mix.
+    // Le dernier nombre est la priorité par défaut (1 = fond, 5 = devant) : à
+    // priorité égale personne ne cède. Le kick passe devant la basse dans le
+    // grave (le « sidechain » classique), la voix devant le lead.
     const std::array<Role, nbRoles> tableRoles
     {{
         // Lead : peu de grave (il laisse la place à la basse et à la rythmique),
         // l'essentiel entre 800 Hz et 3 kHz, là où la mélodie se détache.
-        { "Lead",       100.0f, 1000.0f,  4000.0f, { -14.0f,  -6.0f,  -2.0f,   0.0f,   0.0f,  -2.0f,  -8.0f }, true  },
+        { "Lead",       100.0f, 1000.0f,  4000.0f, { -14.0f,  -6.0f,  -2.0f,   0.0f,   0.0f,  -2.0f,  -8.0f }, true,  4 },
         // Rythmique : le corps (200 à 800 Hz) porte le morceau, les aigus restent en retrait.
-        { "Rythmique",   80.0f,  200.0f,  2000.0f, {  -8.0f,  -2.0f,   0.0f,  -1.0f,  -3.0f,  -6.0f, -12.0f }, true  },
+        { "Rythmique",   80.0f,  200.0f,  2000.0f, {  -8.0f,  -2.0f,   0.0f,  -1.0f,  -3.0f,  -6.0f, -12.0f }, true,  3 },
         // Arpège : entre les deux. Il doit rester net (attaque des notes) sans prendre le corps de la rythmique.
-        { "Arpège",      90.0f,  500.0f,  3500.0f, { -12.0f,  -4.0f,  -1.0f,   0.0f,  -1.0f,  -3.0f,  -9.0f }, true  },
+        { "Arpège",      90.0f,  500.0f,  3500.0f, { -12.0f,  -4.0f,  -1.0f,   0.0f,  -1.0f,  -3.0f,  -9.0f }, true,  3 },
         // Basse et kick : l'énergie est dans le grave et décroît régulièrement.
         // Pas de recherche de résonances : leur note fondamentale ressemble
         // à une résonance, et il ne faut surtout pas l'atténuer.
-        { "Basse",       30.0f,   40.0f,   250.0f, {   0.0f,  -3.0f,  -8.0f, -13.0f, -19.0f, -26.0f, -34.0f }, false },
-        { "Kick",        30.0f,   40.0f,   120.0f, {   0.0f,  -6.0f, -12.0f, -16.0f, -19.0f, -21.0f, -26.0f }, false },
+        { "Basse",       30.0f,   40.0f,   250.0f, {   0.0f,  -3.0f,  -8.0f, -13.0f, -19.0f, -26.0f, -34.0f }, false, 4 },
+        { "Kick",        30.0f,   40.0f,   120.0f, {   0.0f,  -6.0f, -12.0f, -16.0f, -19.0f, -21.0f, -26.0f }, false, 5 },
         // Snare : le corps vers 200 Hz et le claquement des timbres entre 2 et 5 kHz.
-        { "Snare",       80.0f,  150.0f,  5000.0f, { -12.0f,  -2.0f,  -5.0f,  -7.0f,  -6.0f,  -4.0f,  -6.0f }, true  },
+        { "Snare",       80.0f,  150.0f,  5000.0f, { -12.0f,  -2.0f,  -5.0f,  -7.0f,  -6.0f,  -4.0f,  -6.0f }, true,  4 },
         // Hits (percussions, cymbales, samples) : brillants, sans grave utile. Pas de
         // recherche de résonances : le timbre métallique d'une cymbale en est justement fait.
-        { "Hits",       150.0f, 3000.0f, 10000.0f, { -16.0f, -10.0f,  -8.0f,  -6.0f,  -4.0f,  -2.0f,  -3.0f }, false },
+        { "Hits",       150.0f, 3000.0f, 10000.0f, { -16.0f, -10.0f,  -8.0f,  -6.0f,  -4.0f,  -2.0f,  -3.0f }, false, 2 },
         // Voix : le corps vers 200-400 Hz, l'intelligibilité entre 1 et 5 kHz.
-        { "Voix",        90.0f, 1000.0f,  5000.0f, { -12.0f,  -3.0f,   0.0f,  -1.0f,  -4.0f,  -7.0f, -11.0f }, true  },
+        { "Voix",        90.0f, 1000.0f,  5000.0f, { -12.0f,  -3.0f,   0.0f,  -1.0f,  -4.0f,  -7.0f, -11.0f }, true,  5 },
         // Nappe (pads, synthés de fond) : doit rester en retrait, sans grave qui
         // encombre la basse. Pas de recherche de résonances : une note tenue
         // pendant toute l'écoute ressemblerait à une résonance.
-        { "Nappe",      120.0f,  300.0f,  2000.0f, { -10.0f,  -3.0f,   0.0f,  -2.0f,  -5.0f,  -8.0f, -13.0f }, false },
+        { "Nappe",      120.0f,  300.0f,  2000.0f, { -10.0f,  -3.0f,   0.0f,  -2.0f,  -5.0f,  -8.0f, -13.0f }, false, 1 },
     }};
 
     // Sources : ce qui produit le son, donc les défauts possibles.
@@ -200,6 +203,38 @@ Correction doser (const Correction& c, float quantite) noexcept
 
     for (auto& g : d.gains)   g *= q;
     for (auto& g : d.resGain) g *= q;
+
+    // Compensation de volume : on calcule de combien la correction (déjà dosée)
+    // change l'énergie de la piste, en pondérant chaque bande par la part
+    // d'énergie qu'elle contient, puis on rend exactement cette différence.
+    // Chaque bande est évaluée en trois points (un quart d'octave de part et
+    // d'autre du centre) : une bande couvre une octave, pas une seule fréquence.
+    d.compensationDb = 0.0f;
+    double somme = 0.0;
+
+    for (float p : d.poids)
+        somme += (double) p;
+
+    if (q > 0.0f && somme > 0.0)
+    {
+        constexpr double fsCalcul = 48000.0;
+        const Banc banc = construireFiltres (d, fsCalcul);
+        const double quartOctave = std::pow (2.0, 0.25);
+        double puissance = 0.0;
+
+        for (int i = 0; i < nbBandes; ++i)
+        {
+            const double f = frequencesBandes[(size_t) i];
+            const double moyenne = (std::pow (10.0, reponseDb (banc, f / quartOctave, fsCalcul) / 10.0)
+                                  + std::pow (10.0, reponseDb (banc, f, fsCalcul) / 10.0)
+                                  + std::pow (10.0, reponseDb (banc, f * quartOctave, fsCalcul) / 10.0)) / 3.0;
+            puissance += (double) d.poids[(size_t) i] * moyenne;
+        }
+
+        // Plafonné à +/-6 dB : une mesure aberrante ne doit pas déclencher un gros gain.
+        d.compensationDb = (float) std::clamp (-10.0 * std::log10 (puissance / somme + 1.0e-12), -6.0, 6.0);
+    }
+
     return d;
 }
 
@@ -210,6 +245,13 @@ Banc construireFiltres (const Correction& c, double fs) noexcept
     // Coupe-bas 12 dB par octave, Q = 0,707 : la pente la plus raide sans
     // bosse à la coupure.
     banc[0] = passeHaut (c.coupeBasHz, 0.7071, fs);
+
+    // La compensation de volume est un simple gain : on le range dans le premier
+    // filtre. La réponse affichée (reponseDb) le contient donc aussi.
+    const double gainLineaire = std::pow (10.0, (double) c.compensationDb / 20.0);
+    banc[0].b0 *= gainLineaire;
+    banc[0].b1 *= gainLineaire;
+    banc[0].b2 *= gainLineaire;
 
     // Les deux bandes extrêmes sont des plateaux, les autres des cloches.
     for (int i = 0; i < nbBandes; ++i)
@@ -402,17 +444,63 @@ Correction calculerCorrection (const Role& r, const Source& s, const Son& n, con
         niveauMax = std::max (niveauMax, (double) m.niveaux[(size_t) i]);
     }
 
+    // Part d'énergie de chaque bande dans la piste écoutée. Elle sert deux fois :
+    // ici, pour savoir ce que « ne pas monter » veut dire, et plus bas pour la
+    // compensation de volume (voir doser()).
+    double total = 0.0;
+    std::array<double, nbBandes> energie {};
+
+    for (int i = 0; i < nbBandes; ++i)
+    {
+        energie[(size_t) i] = std::pow (10.0, (double) m.niveaux[(size_t) i] / 10.0);
+        total += energie[(size_t) i];
+    }
+
+    const bool poidsConnus = total > 0.0 && std::isfinite (total);
+
+    if (poidsConnus)
+        for (int i = 0; i < nbBandes; ++i)
+            c.poids[(size_t) i] = (float) (energie[(size_t) i] / total);
+
+    // Bandes qu'on s'interdit de monter :
+    //   - une bande presque vide (45 dB sous la plus forte) ne contient que du
+    //     bruit : la monter ne ferait entendre que du souffle ;
+    //   - une bande située à moins d'une octave au-dessus du coupe-bas est au bord
+    //     de la zone utile de l'instrument. Une guitare (coupe-bas à 80 Hz) n'a
+    //     presque rien de musical dans la bande de 100 Hz, surtout de la ronflette.
+    //     Pour une basse ou un kick (coupe-bas à 30 Hz), aucune bande n'est concernée.
+    std::array<bool, nbBandes> sansMontee {};
+
     for (int i = 0; i < nbBandes; ++i)
     {
         // On retire la moyenne : la correction change le timbre, pas le volume.
-        double v = voulu[(size_t) i] - moyenne;
+        voulu[(size_t) i] = std::clamp (voulu[(size_t) i] - moyenne, coupeMax, monteeMax);
 
-        // Une bande presque vide (45 dB sous la plus forte) ne contient que
-        // du bruit : la monter ne ferait entendre que du souffle.
-        if ((double) m.niveaux[(size_t) i] < niveauMax - 45.0)
-            v = std::min (v, 0.0);
+        sansMontee[(size_t) i] = (double) m.niveaux[(size_t) i] < niveauMax - 45.0
+                              || frequencesBandes[(size_t) i] < 2.0 * (double) c.coupeBasHz;
+    }
 
-        voulu[(size_t) i] = std::clamp (v, coupeMax, monteeMax);
+    // « Ne pas monter » se juge APRÈS la compensation de volume. Si la correction
+    // baisse les bandes où se trouve l'énergie (les médiums d'une guitare, par
+    // exemple), la compensation remonte toute la courbe d'autant : une bande
+    // laissée « à zéro » se retrouverait montée. On la plafonne donc au gain moyen
+    // de la piste, pondéré par l'énergie : après compensation, elle sera à 0 dB au plus.
+    // Deux passes : abaisser une bande déplace un peu ce gain moyen.
+    for (int passe = 0; passe < 3; ++passe)
+    {
+        double gainMoyen = 0.0;
+
+        if (poidsConnus)
+        {
+            double puissance = 0.0;
+            for (int i = 0; i < nbBandes; ++i)
+                puissance += (double) c.poids[(size_t) i] * std::pow (10.0, voulu[(size_t) i] / 10.0);
+            gainMoyen = 10.0 * std::log10 (puissance + 1.0e-12);
+        }
+
+        for (int i = 0; i < nbBandes; ++i)
+            if (sansMontee[(size_t) i])
+                voulu[(size_t) i] = std::clamp (std::min (voulu[(size_t) i], gainMoyen), coupeMax, monteeMax);
     }
 
     // 2. Réglage des sept filtres. Ils se chevauchent : le gain réglé sur une
@@ -440,6 +528,10 @@ Correction calculerCorrection (const Role& r, const Source& s, const Son& n, con
 
     c.gains = essai.gains;
 
+    // Repère de niveau pour le démasquage : transmis tel quel au fil audio.
+    c.refValide = m.refValide;
+    c.refDb = m.refDb;
+
     // 3. Résonances : atténuation prudente, de 2 à 4 dB selon le dépassement.
     //    Même filtrées par la persistance, certaines bosses peuvent n'être que
     //    des notes tenues ; une atténuation légère limite les dégâts dans ce cas.
@@ -458,6 +550,100 @@ Correction calculerCorrection (const Role& r, const Source& s, const Son& n, con
     }
 
     return c;
+}
+
+// --- Démasquage dynamique ------------------------------------------------------
+
+namespace
+{
+    // Passe-bande : ne garde que la zone autour de f. Avec Q = 1,4, il laisse
+    // passer environ une octave, la largeur de nos bandes.
+    Coefs passeBande (double f, double q, double fs) noexcept
+    {
+        const double w = pulsation (f, fs), c = std::cos (w), alpha = std::sin (w) / (2.0 * q);
+        return normaliser ({ alpha, 0.0, -alpha, 1.0 + alpha, -2.0 * c, 1.0 - alpha });
+    }
+}
+
+BancBandes construireFiltresAnalyse (double fs) noexcept
+{
+    BancBandes banc;
+
+    for (int i = 0; i < nbBandes; ++i)
+        banc[(size_t) i] = passeBande (frequencesBandes[(size_t) i], 1.4, fs);
+
+    return banc;
+}
+
+BancBandes construireFiltresDynamiques (const Reductions& reductions, double fs) noexcept
+{
+    // Mêmes formes que les bandes de la correction fixe : plateaux aux deux
+    // bouts, cloches d'environ une octave entre les deux.
+    BancBandes banc;
+
+    for (int i = 0; i < nbBandes; ++i)
+    {
+        const double g = reductions[(size_t) i], f = frequencesBandes[(size_t) i];
+
+        if (i == 0)                 banc[0]          = plateau (f, g, fs, true);
+        else if (i == nbBandes - 1) banc[(size_t) i] = plateau (f, g, fs, false);
+        else                        banc[(size_t) i] = cloche (f, qBande, g, fs);
+    }
+
+    return banc;
+}
+
+double reponseDb (const BancBandes& banc, double f, double fs) noexcept
+{
+    const double w = 2.0 * pi * f / fs;
+    const std::complex<double> z1 = std::polar (1.0, -w), z2 = std::polar (1.0, -2.0 * w);
+    double db = 0.0;
+
+    for (const auto& c : banc)
+    {
+        const auto h = (c.b0 + c.b1 * z1 + c.b2 * z2) / (1.0 + c.a1 * z1 + c.a2 * z2);
+        db += 20.0 * std::log10 (std::abs (h) + 1.0e-12);
+    }
+
+    return db;
+}
+
+Equilibre poidsZone (const Role& r) noexcept
+{
+    Equilibre poids {};
+
+    for (int i = 0; i < nbBandes; ++i)
+    {
+        // Distance, en octaves, entre le centre de la bande et la zone du rôle.
+        const double f = frequencesBandes[(size_t) i];
+        double distance = 0.0;
+
+        if (f < (double) r.importantMin)      distance = std::log2 ((double) r.importantMin / f);
+        else if (f > (double) r.importantMax) distance = std::log2 (f / (double) r.importantMax);
+
+        poids[(size_t) i] = (float) std::clamp (1.0 - distance / 0.5, 0.0, 1.0);
+    }
+
+    return poids;
+}
+
+float activite (float niveauDb, float refDb) noexcept
+{
+    // De 0 (20 dB sous le niveau habituel de la piste : elle ne joue pas ici)
+    // à 1 (à moins de 8 dB de son niveau habituel : elle joue franchement).
+    return std::clamp ((niveauDb - (refDb - 20.0f)) / 12.0f, 0.0f, 1.0f);
+}
+
+float facteurPriorite (int quiDemande, int quiCede) noexcept
+{
+    // À priorité égale ou inférieure, on ne demande rien : personne ne cède.
+    return std::clamp ((float) (quiDemande - quiCede) * 0.25f, 0.0f, 1.0f);
+}
+
+float reductionBande (float poidsZoneBande, float activiteBande, int quiDemande, int quiCede, float quantite) noexcept
+{
+    return -profondeurMaxDb * std::clamp (quantite, 0.0f, 1.0f) * facteurPriorite (quiDemande, quiCede)
+         * std::clamp (activiteBande, 0.0f, 1.0f) * std::clamp (poidsZoneBande, 0.0f, 1.0f);
 }
 
 } // namespace rogus

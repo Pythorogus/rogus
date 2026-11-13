@@ -102,14 +102,19 @@ Principes décidés :
 
 **Étape 1 terminée** (13 novembre 2026) : compilée avec MSVC 19.44 et CMake 4.4.4, chargée par Pierre dans FL Studio sur une piste de guitare.
 
-**Étape 2 écrite, compilée et testée sur signaux de synthèse** (même jour), mais **pas encore écoutée dans FL Studio**. Elle n'est terminée qu'après écoute sur de vraies prises.
+**Étape 2 écrite, compilée, testée sur signaux de synthèse, puis écoutée par Pierre** (13 novembre 2026) : sur « Can of Monster », Rogus posé sur toutes les pistes avec leurs rôles, à volume égal (export sans Rogus −27,00 LUFS, avec −26,98), il préfère la version avec Rogus. L'effet sur le morceau complet est discret (au plus environ 1 dB par bande, quantité à 60 %). Validé sur un seul morceau : les cibles restent à affiner sur d'autres prises.
+
+**Étape 3 écrite, compilée, testée hors FL Studio et installée** (13 novembre 2026). Vérifié dans FL Studio par une capture d'écran de Pierre (« Can of Monster », 10 instances) : la fenêtre s'affiche correctement, les instances se voient (« 9 autres pistes Rogus visibles »), et le démasquage agit (une guitare rythmique « cède 1,3 dB vers 100 Hz à : Kick »). **Pas encore vérifié** : que FL fournit bien la position de lecture (identité écoute / export), et le jugement à l'oreille. Voir « Fonctionnement du démasquage » plus bas.
+
+Constat sur cette même capture (guitare électrique claire, rôle Rythmique, quantité 60 %) : la correction fixe monte le grave de +5,5 dB vers 60 Hz et l'aigu de +6 dB au-dessus de 10 kHz, les médiums restant à 0. Elle était donc en butée aux deux bouts. **Corrigé pour le grave** le même jour (`calculerCorrection`) : on ne monte plus une bande située à moins d'une octave au-dessus du coupe-bas (bord de la zone utile : pour une guitare, la bande de 100 Hz ne contient presque que de la ronflette), ni une bande presque vide. « Ne pas monter » se juge **après** la compensation de volume : ces bandes sont plafonnées au gain moyen de la piste pondéré par l'énergie, sinon la compensation les remonte quand même (c'était la cause des +5,5 dB). Basse et kick (coupe-bas à 30 Hz) ne sont pas concernés. **Reste ouvert** : la montée de l'aigu (+6 dB au-dessus de 10 kHz) n'est pas touchée, en attente du jugement de Pierre à l'oreille ; et cette butée montre que la cible « Rythmique » est loin de sa guitare claire.
 
 | Fichier | Rôle |
 |---|---|
 | `CMakeLists.txt` | projet CMake ; télécharge JUCE 8.0.9 (version figée) à la première configuration |
-| `Source/Correction.*` | cœur sans dépendance au plugin : table des rôles, analyse d'une écoute, calcul de la correction, filtres |
-| `Source/PluginProcessor.*` | moteur audio : écoute de la piste, filtrage, sauvegarde |
-| `Source/PluginEditor.*` | fenêtre : rôle, courbe appliquée, quantité, bouton d'écoute, texte d'état |
+| `Source/Correction.*` | cœur sans dépendance au plugin : tables des rôles, sources et sons, analyse d'une écoute, calcul de la correction, filtres, briques du démasquage |
+| `Source/Orchestre.*` | mémoire partagée entre les instances du plugin : chacune y annonce ce qu'elle joue |
+| `Source/PluginProcessor.*` | moteur audio : écoute de la piste, filtrage, annonces et démasquage, sauvegarde |
+| `Source/PluginEditor.*` | fenêtre : trois menus, courbe appliquée, correction fixe, démasquage, textes d'état |
 | `Tests/tests.cpp` | tests du moteur hors FL Studio |
 | `compiler.ps1` | configure et compile en Release |
 | `tester.ps1` | compile et lance les tests |
@@ -125,8 +130,27 @@ Fonctionnement de l'EQ fixe :
 2. **Écoute** : sur demande, le plugin accumule le spectre de l'entrée pendant 10 s de son réel (les silences ne comptent pas, 3 s au minimum). Il en tire une *mesure* : niveau par bande et jusqu'à trois résonances étroites (200 Hz à 5 kHz).
 3. **Correction** = écart entre la cible (rôle + source + son) et la mesure, moyenne retirée (le volume ne change pas), bornée à -6 / +4 dB, réalisée par un coupe-bas, sept filtres larges et des encoches de 2 à 4 dB sur les résonances. Sans écoute, seul le coupe-bas agit.
 4. **Quantité** (0 à 100 %) dose le tout. À 0 % ou correction désactivée, le son traverse le plugin sans aucun calcul.
+5. **Compensation de volume** : un gain global (`compensationDb`, calculé dans `doser()`, plafonné à ±6 dB) rend exactement ce que la correction retire ou ajoute en énergie, en pondérant chaque bande par la part d'énergie de la piste écoutée (`poids`, déduits de la mesure : rien de plus à enregistrer dans le projet). Ce n'est qu'un gain : la forme de la courbe ne change pas. Raison : la moyenne des gains en dB retirée dans `calculerCorrection` ne conserve PAS le volume, car il dépend de l'endroit où est l'énergie. Mesuré le 13 novembre 2026 sur un export de « Can of Monster » avec Rogus sur toutes les pistes, avant la compensation : −1,8 LU en moyenne, de −0,4 dB (passages forts) à −3,4 dB (passages calmes) ; l'écart variant d'une piste à l'autre, il déplaçait aussi l'équilibre entre pistes. Après compensation, les tests (bruit en bandes d'octave, un cas plus dur que la musique) donnent moins de 0,5 dB d'écart, contre 1,1 à 3,4 dB sans. Limites : l'énergie sous 70 Hz et au-dessus de 9 kHz n'est pas pesée (sept bandes seulement) ; le calcul est en énergie, pas en sonie perçue ; une encoche de résonance très étroite est mal vue par l'évaluation en trois points par bande.
 
 La mesure est enregistrée dans le projet de l'hôte, pas la correction : changer de rôle, de source ou de son, ou améliorer le calcul, ne demande pas de réécoute. La courbe affichée utilise les mêmes filtres que l'audio.
+
+Fonctionnement du démasquage (étape 3) :
+
+1. **Annonce** : chaque instance mesure en continu l'énergie de sa piste (entrée, avant correction) dans les sept bandes, par « ticks » de 1024 échantillons. Pour chaque bande elle publie une *activité* de 0 à 1 : la piste joue-t-elle là, par rapport à son propre niveau habituel (0 à 20 dB en dessous, 1 à moins de 8 dB) ? Ce niveau habituel (`refDb`) vient de l'écoute : **une piste jamais écoutée, ou écoutée avant l'étape 3, n'annonce rien et ne reçoit donc aucune place**.
+2. **Orchestre** (`Orchestre.*`) : un tableau de 64 places partagé par toutes les instances chargées dans le même programme, lu et écrit sans verrou (atomiques). Aucun routage dans l'hôte.
+3. **Décision** : une piste ne cède qu'aux pistes **strictement plus prioritaires**, dans les bandes de leur zone « à garder lisible » (celle du rôle), et seulement pendant qu'elles y jouent. Réduction = 6 dB au plus × quantité × 0,25 par cran d'écart de priorité × activité × poids de la zone. Plusieurs demandes sur une bande : la plus forte, pas la somme. À priorité égale personne ne cède.
+4. **Priorité** : menu Auto (celle du rôle) ou 1 à 5. Par défaut : Kick 5, Voix 5, Lead 4, Snare 4, Basse 4, Rythmique 3, Arpège 3, Hits 2, Nappe 1. Kick devant basse dans la bande de 100 Hz = le « sidechain » sans routage.
+5. **Application** : sept filtres (mêmes formes que la correction fixe) après la correction fixe. **Réactivité** : attaque de 200 à 15 ms, relâchement de 800 à 80 ms. Pas de compensation de volume ici : la baisse est voulue.
+6. **Même résultat à l'écoute et à l'export** : les ticks sont numérotés d'après la position de lecture de l'hôte, et une instance ne lit que le tick terminé avant le début de son bloc. L'ordre de traitement des pistes et la taille des blocs ne changent donc rien (testé : sortie identique à l'échantillon près pour l'ordre inversé et pour des blocs de 256 contre 512 ; 0,1 dB près pour des blocs de 480, non alignés sur les ticks). Si l'hôte ne donne pas la position (ou lecture arrêtée) : repli sur la dernière annonce de chaque piste, ignorée après 250 ms, sans garantie d'identité à l'export.
+7. **Paramètres ajoutés** (à la suite, valeurs par défaut pour les anciens projets) : `priorite` (Auto), `demasquageActif` (oui), `demasquageQuantite` (50 %), `reactivite` (50 %). La mesure gagne les champs `ref0` à `ref6`, facultatifs : pas de changement de `versionEtat`.
+
+Limites connues de l'étape 3 :
+
+- Les instances se voient dans FL Studio tant qu'elles sont chargées normalement. Si le texte d'état affichait « aucune autre piste Rogus visible » avec plusieurs instances (plugin « bridgé » par FL, par exemple), elles seraient isolées dans des programmes séparés et il faudrait une vraie communication entre programmes.
+- Le plugin ne voit pas les faders du mixeur (il est placé avant) : il sait qu'une piste joue, pas à quel volume elle sort. La priorité remplace cette information.
+- Réglages devinés, à affiner à l'oreille : profondeur maximale (6 dB), seuils d'activité (−20 / −8 dB), temps d'attaque et de relâchement, priorités par défaut, zones des rôles.
+- Il faut refaire une écoute sur chaque piste pour qu'elle soit prise en compte.
+- Dans les tests, plusieurs instances coexistent dans le même programme et se voient : garder des priorités égales entre elles, ou les détruire, pour qu'un test n'en influence pas un autre.
 
 Limites connues de l'étape 2 :
 
@@ -151,15 +175,13 @@ Règles du code audio : pas d'allocation mémoire ni d'attente sur un verrou dan
 
 **Règle de compatibilité (exigence de Pierre) : une nouvelle version doit toujours reprendre les réglages enregistrés par la précédente.** Charger la nouvelle version dans un projet existant ne doit rien faire perdre.
 
-- Ne jamais supprimer ni renommer un identifiant de paramètre (`role`, `source`, `son`, `correctionActive`, `quantite`), ni les codes du plugin (`Rogs` / `Rgs1`).
+- Ne jamais supprimer ni renommer un identifiant de paramètre (`role`, `source`, `son`, `correctionActive`, `quantite`, `priorite`, `demasquageActif`, `demasquageQuantite`, `reactivite`), ni les codes du plugin (`Rogs` / `Rgs1`).
 - Les listes de choix ne s'enregistrent que par leur numéro : on n'en réordonne ni n'en retire jamais une entrée ; les nouvelles s'ajoutent **à la fin**.
 - Si un changement incompatible est vraiment nécessaire : augmenter `versionEtat` dans `PluginProcessor.cpp`, écrire la conversion depuis la version précédente dans `migrerEtat`, et ajouter un test qui fabrique un faux ancien état (voir `etatEtape2` dans `Tests/tests.cpp`) et vérifie ce qui est repris. Les tests doivent échouer si on retire la conversion.
 - Formats déjà connus : étape 1 et étape 2 (sans numéro de version, converties à l'ouverture), version 3 actuelle (trois menus). L'ancien rôle de l'étape 2 (6 choix) est converti en rôle + source.
 - Ce n'est vérifié que par les tests, sur des états fabriqués : **pas encore sur un vrai projet FL enregistré avec l'étape 2**.
 
 **Licence** : JUCE est sous AGPL v3 (ou licence commerciale). Sans conséquence en usage personnel, contraignant en cas de distribution.
-
-Points techniques à traiter à l'étape 3 : synchroniser les instances sur la position de lecture de l'hôte (et non l'horloge), pour que l'export hors temps réel donne le même résultat que l'écoute.
 
 Abandonné pour l'instant : profils de style et détection de genre pour le mastering, interface web locale.
 
