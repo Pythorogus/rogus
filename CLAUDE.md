@@ -1,4 +1,4 @@
-# LANDRBIS
+# rogus
 
 Outil personnel de mastering audio automatique en ligne de commande, inspiré de LANDR.
 Tout tourne en local : aucun fichier audio n'est envoyé à un service externe.
@@ -71,7 +71,7 @@ python -m venv .venv
 - Sur un morceau très percussif, une cible élevée peut ne pas être atteinte (avertissement affiché).
 - Entrée : WAV, FLAC, AIFF, OGG, MP3. Sortie : WAV uniquement.
 - Matchering travaille en 44,1 kHz : en mode référence, la sortie est à cette fréquence.
-- Validé uniquement sur des signaux de synthèse (cible LUFS et plafond respectés). Pas encore évalué à l'oreille sur de vrais morceaux.
+- Validé sur des signaux de synthèse (cible LUFS et plafond respectés). Des morceaux réels ont aussi été traités (fichiers de test du dossier), mais l'écoute à l'oreille n'est pas encore documentée.
 - Pas de tests automatisés.
 
 ## Objectif du projet
