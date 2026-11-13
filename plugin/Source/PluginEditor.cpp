@@ -1,0 +1,250 @@
+#include "PluginEditor.h"
+
+namespace
+{
+    const juce::Colour couleurFond    { 0xff1e2428 };
+    const juce::Colour couleurCadre   { 0xff161b1e };
+    const juce::Colour couleurGrille  { 0xff323b41 };
+    const juce::Colour couleurTexte   { 0xffa9b4bb };
+    const juce::Colour couleurCourbe  { 0xff4fb3e8 };
+    const juce::Colour couleurZone    { 0xff7f77dd };
+    const juce::Colour couleurReson   { 0xffe0764f };
+
+    constexpr float fMin = 20.0f, fMax = 20000.0f;     // étendue de l'oreille humaine
+    constexpr float dbMax = 12.0f;                     // échelle verticale : -12 à +12 dB
+
+    juce::String ecrireFrequence (float hz)
+    {
+        return hz >= 1000.0f ? juce::String (hz / 1000.0f, 1).replaceCharacter ('.', ',') + " kHz"
+                             : juce::String (juce::roundToInt (hz)) + " Hz";
+    }
+}
+
+// --- Courbe ------------------------------------------------------------------
+
+void CourbeCorrection::paint (juce::Graphics& g)
+{
+    const auto zone = getLocalBounds().toFloat();
+    g.setColour (couleurCadre);
+    g.fillRoundedRectangle (zone, 6.0f);
+
+    const auto trace = zone.reduced (34.0f, 14.0f).withTrimmedBottom (10.0f);
+
+    // Axe horizontal logarithmique : chaque octave occupe la même largeur,
+    // comme sur un clavier de piano.
+    auto xDe = [&] (float f) { return trace.getX() + trace.getWidth() * std::log (f / fMin) / std::log (fMax / fMin); };
+    auto yDe = [&] (float db) { return trace.getCentreY() - trace.getHeight() * 0.5f * juce::jlimit (-dbMax, dbMax, db) / dbMax; };
+
+    const auto& role = rogus::role (moteur.lireRole());
+
+    // Zone où ce rôle doit rester lisible dans le mix.
+    g.setColour (couleurZone.withAlpha (0.16f));
+    g.fillRect (juce::Rectangle<float>::leftTopRightBottom (xDe (role.importantMin), trace.getY(),
+                                                             xDe (role.importantMax), trace.getBottom()));
+
+    g.setFont (juce::FontOptions (11.0f));
+
+    for (float f : { 50.0f, 100.0f, 200.0f, 500.0f, 1000.0f, 2000.0f, 5000.0f, 10000.0f })
+    {
+        g.setColour (couleurGrille);
+        g.drawVerticalLine (juce::roundToInt (xDe (f)), trace.getY(), trace.getBottom());
+        g.setColour (couleurTexte);
+        g.drawText (f >= 1000.0f ? juce::String (juce::roundToInt (f / 1000.0f)) + "k" : juce::String (juce::roundToInt (f)),
+                    juce::Rectangle<float> (xDe (f) - 20.0f, trace.getBottom() + 2.0f, 40.0f, 14.0f),
+                    juce::Justification::centred);
+    }
+
+    for (float db : { -12.0f, -6.0f, 0.0f, 6.0f, 12.0f })
+    {
+        g.setColour (db == 0.0f ? couleurTexte.withAlpha (0.6f) : couleurGrille);
+        g.drawHorizontalLine (juce::roundToInt (yDe (db)), trace.getX(), trace.getRight());
+        g.setColour (couleurTexte);
+        g.drawText ((db > 0.0f ? "+" : "") + juce::String (juce::roundToInt (db)),
+                    juce::Rectangle<float> (zone.getX(), yDe (db) - 7.0f, 30.0f, 14.0f),
+                    juce::Justification::centredRight);
+    }
+
+    // La courbe elle-même, avec la quantité en cours.
+    const double fs = moteur.lireFrequenceEch();
+    const auto dosee = rogus::doser (moteur.lireCorrection(), moteur.lireQuantiteEffective());
+    const auto banc = rogus::construireFiltres (dosee, fs);
+
+    juce::Path chemin;
+    const int nbPoints = juce::jmax (2, (int) trace.getWidth());
+
+    for (int i = 0; i < nbPoints; ++i)
+    {
+        const float f = fMin * std::pow (fMax / fMin, (float) i / (float) (nbPoints - 1));
+        const float y = yDe ((float) rogus::reponseDb (banc, juce::jmin ((double) f, fs * 0.49), fs));
+
+        if (i == 0) chemin.startNewSubPath (trace.getX(), y);
+        else        chemin.lineTo (trace.getX() + (float) i, y);
+    }
+
+    g.saveState();
+    g.reduceClipRegion (trace.toNearestInt());
+    g.setColour (moteur.lireQuantiteEffective() > 0.0f ? couleurCourbe : couleurTexte.withAlpha (0.5f));
+    g.strokePath (chemin, juce::PathStrokeType (2.0f));
+    g.restoreState();
+
+    // Repères des résonances atténuées.
+    g.setColour (couleurReson);
+
+    for (int i = 0; i < dosee.nbRes; ++i)
+    {
+        const float f = dosee.resHz[(size_t) i];
+        const float y = yDe ((float) rogus::reponseDb (banc, f, fs));
+        g.fillEllipse (xDe (f) - 4.0f, y - 4.0f, 8.0f, 8.0f);
+    }
+}
+
+// --- Fenêtre -----------------------------------------------------------------
+
+RogusEditor::RogusEditor (RogusProcessor& m)
+    : AudioProcessorEditor (&m), moteur (m), courbe (m)
+{
+    // Un petit titre au-dessus de chaque menu : le rôle (fonction), la source
+    // (ce qui produit le son) et le son (son caractère).
+    auto preparerMenu = [this] (juce::Label& etiquette, const char* titre,
+                                juce::ComboBox& menu, const juce::StringArray& choix)
+    {
+        etiquette.setText (rogus::fr (titre), juce::dontSendNotification);
+        etiquette.setFont (juce::FontOptions (12.0f));
+        etiquette.setColour (juce::Label::textColourId, couleurTexte);
+        etiquette.setJustificationType (juce::Justification::centredLeft);
+        addAndMakeVisible (etiquette);
+
+        // Les choix doivent exister avant l'attache, qui sélectionne le bon.
+        menu.addItemList (choix, 1);
+        addAndMakeVisible (menu);
+    };
+
+    preparerMenu (etiquetteRole,   "Rôle",   choixRole,   rogus::nomsRoles());
+    preparerMenu (etiquetteSource, "Source", choixSource, rogus::nomsSources());
+    preparerMenu (etiquetteSon,    "Son",    choixSon,    rogus::nomsSons());
+
+    addAndMakeVisible (courbe);
+
+    etat.setJustificationType (juce::Justification::centredLeft);
+    etat.setColour (juce::Label::textColourId, couleurTexte);
+    etat.setFont (juce::FontOptions (13.0f));
+    addAndMakeVisible (etat);
+
+    addAndMakeVisible (boutonActif);
+
+    etiquetteQuantite.setText (rogus::fr ("Quantité"), juce::dontSendNotification);
+    etiquetteQuantite.setJustificationType (juce::Justification::centredRight);
+    addAndMakeVisible (etiquetteQuantite);
+
+    curseurQuantite.setSliderStyle (juce::Slider::LinearHorizontal);
+    curseurQuantite.setTextBoxStyle (juce::Slider::TextBoxRight, false, 56, 22);
+    curseurQuantite.setTextValueSuffix (" %");
+    addAndMakeVisible (curseurQuantite);
+
+    boutonEcoute.onClick = [this]
+    {
+        if (moteur.ecouteEnCours()) moteur.arreterEcoute();
+        else                        moteur.demarrerEcoute();
+    };
+    addAndMakeVisible (boutonEcoute);
+
+    attacheRole     = std::make_unique<AttacheChoix>   (moteur.parametres, IdParam::role, choixRole);
+    attacheSource   = std::make_unique<AttacheChoix>   (moteur.parametres, IdParam::source, choixSource);
+    attacheSon      = std::make_unique<AttacheChoix>   (moteur.parametres, IdParam::son, choixSon);
+    attacheActif    = std::make_unique<AttacheBouton>  (moteur.parametres, IdParam::correctionActive, boutonActif);
+    attacheQuantite = std::make_unique<AttacheCurseur> (moteur.parametres, IdParam::quantite, curseurQuantite);
+
+    setSize (640, 470);
+    timerCallback();
+    startTimerHz (15);     // rafraîchit la courbe et le texte d'état
+}
+
+RogusEditor::~RogusEditor()
+{
+    stopTimer();
+}
+
+juce::String RogusEditor::texteEtat() const
+{
+    if (moteur.ecouteEnCours())
+        return rogus::fr ("Écoute : ") + juce::String (juce::roundToInt (moteur.progressionEcoute() * 100.0f))
+             + rogus::fr (" %. Joue normalement, avec des notes variées.");
+
+    if (moteur.ecouteTropCourte())
+        return rogus::fr ("Écoute trop courte : il faut au moins 3 secondes de son.");
+
+    if (moteur.lireQuantiteEffective() <= 0.0f)
+        return rogus::fr ("Correction à l'arrêt : le son n'est pas modifié.");
+
+    const auto correction = moteur.lireCorrection();
+
+    if (! moteur.lireMesure().valide)
+        return rogus::fr ("Pas encore d'écoute : seul le coupe-bas du rôle (")
+             + ecrireFrequence (correction.coupeBasHz) + rogus::fr (") est appliqué.");
+
+    juce::String texte = rogus::fr ("Équilibre corrigé d'après l'écoute.");
+
+    if (correction.nbRes > 0)
+    {
+        juce::StringArray liste;
+        for (int i = 0; i < correction.nbRes; ++i)
+            liste.add (ecrireFrequence (correction.resHz[(size_t) i]));
+
+        texte += rogus::fr (" Résonances atténuées : ") + liste.joinIntoString (", ") + ".";
+    }
+
+    return texte;
+}
+
+void RogusEditor::timerCallback()
+{
+    etat.setText (texteEtat(), juce::dontSendNotification);
+    boutonEcoute.setButtonText (moteur.ecouteEnCours() ? rogus::fr ("Arrêter l'écoute")
+                                                       : rogus::fr ("Écouter la piste"));
+    courbe.repaint();
+}
+
+void RogusEditor::paint (juce::Graphics& g)
+{
+    g.fillAll (couleurFond);
+
+    g.setColour (juce::Colours::white);
+    g.setFont (juce::FontOptions (20.0f));
+    g.drawText ("Rogus", getLocalBounds().reduced (16, 0).removeFromTop (48), juce::Justification::centredLeft);
+}
+
+void RogusEditor::resized()
+{
+    auto zone = getLocalBounds().reduced (16);
+
+    zone.removeFromTop (30);                        // place du titre « Rogus »
+
+    // Trois colonnes égales : un titre, puis le menu en dessous.
+    auto menus = zone.removeFromTop (46);
+    const int largeur = (menus.getWidth() - 2 * 12) / 3;
+
+    auto placer = [&] (juce::Label& etiquette, juce::ComboBox& menu)
+    {
+        auto colonne = menus.removeFromLeft (largeur);
+        menus.removeFromLeft (12);
+        etiquette.setBounds (colonne.removeFromTop (16));
+        menu.setBounds (colonne.reduced (0, 1));
+    };
+
+    placer (etiquetteRole, choixRole);
+    placer (etiquetteSource, choixSource);
+    placer (etiquetteSon, choixSon);
+    zone.removeFromTop (10);
+
+    auto bas = zone.removeFromBottom (34);
+    boutonActif.setBounds (bas.removeFromLeft (140));
+    boutonEcoute.setBounds (bas.removeFromRight (150).reduced (0, 2));
+    bas.removeFromRight (12);
+    etiquetteQuantite.setBounds (bas.removeFromLeft (70));
+    curseurQuantite.setBounds (bas);
+
+    zone.removeFromBottom (6);
+    etat.setBounds (zone.removeFromBottom (24));
+    zone.removeFromBottom (6);
+    courbe.setBounds (zone);
+}
