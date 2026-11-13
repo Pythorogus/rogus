@@ -1,0 +1,6 @@
+numpy
+scipy
+soundfile
+pyloudnorm
+# Uniquement pour le mode --reference (licence GPL v3) :
+matchering
