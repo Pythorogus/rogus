@@ -24,7 +24,7 @@ if (-not $estAdmin)
     # Relance dans une fenêtre élevée, puis vérifie le résultat depuis ici :
     # la fenêtre élevée se ferme toute seule et ses messages ne sont pas visibles.
     Start-Process powershell -Verb RunAs -Wait `
-        -ArgumentList '-NoProfile', '-File', "`"$PSCommandPath`""
+        -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`""
 
     $installe = Join-Path $cible 'Rogus.vst3\Contents\x86_64-win\Rogus.vst3'
     if ((Test-Path $installe) -and ((Get-Item $installe).LastWriteTime -ge (Get-Item (Join-Path $source 'Contents\x86_64-win\Rogus.vst3')).LastWriteTime))
