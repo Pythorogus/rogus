@@ -175,9 +175,12 @@ juce::AudioProcessorValueTreeState::ParameterLayout RogusProcessor::creerParamet
         juce::AudioParameterFloatAttributes().withLabel ("%")));
 
     // --- Étape 4 : compression par rôle. Elle n'agit que sur une piste écoutée
-    //     avec cette version : un ancien projet sonne donc comme avant. ---
+    //     avec cette version : un ancien projet sonne donc comme avant.
+    //     Elle est à l'ARRÊT par défaut : elle est surtout utile sur la voix et
+    //     la basse, et doit rester un choix au cas par cas. Les réglages par
+    //     rôle restent dans la table, prêts à servir quand on la coche. ---
     disposition.add (std::make_unique<juce::AudioParameterBool> (
-        juce::ParameterID { IdParam::compressionActive, 1 }, "Compression", true));
+        juce::ParameterID { IdParam::compressionActive, 1 }, "Compression", false));
 
     disposition.add (std::make_unique<juce::AudioParameterFloat> (
         juce::ParameterID { IdParam::compressionQuantite, 1 }, rogus::fr ("Quantité de compression"),

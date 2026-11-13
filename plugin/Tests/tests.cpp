@@ -718,6 +718,7 @@ int main()
         choisir (p, IdParam::correctionActive, 0.0f);        // on isole la compression
         choisir (p, IdParam::demasquageActif, 0.0f);
         choisir (p, IdParam::compressionQuantite, 100.0f);
+        choisir (p, IdParam::compressionActive, 1.0f);       // à l'arrêt par défaut : on la coche
         p.demarrerEcoute();
         jouerAlterne (p, 11.0);
         p.mettreAJour();
@@ -750,6 +751,7 @@ int main()
             choisir (neuf, IdParam::correctionActive, 0.0f);
             choisir (neuf, IdParam::demasquageActif, 0.0f);
             choisir (neuf, IdParam::compressionQuantite, 100.0f);
+            choisir (neuf, IdParam::compressionActive, 1.0f);   // coché, mais sans écoute
             jouerAlterne (neuf, 2.0);
             verifier (jouerAlterne (neuf, 2.0).ecartMax == 0.0f,
                       "sans ecoute : la compression ne touche pas au son, meme a 100 %");
@@ -1003,8 +1005,9 @@ int main()
                       && std::abs (q.parametres.getRawParameterValue (IdParam::demasquageQuantite)->load() - 50.0f) < 0.01f,
                       "projet d'avant l'etape 3 : nouveaux reglages a leur valeur par defaut (priorite du role)");
             verifier (! q.lireMesure().histoValide && ! q.lireCorrection().compression.valide
+                      && q.parametres.getRawParameterValue (IdParam::compressionActive)->load() < 0.5f
                       && std::abs (q.parametres.getRawParameterValue (IdParam::compressionQuantite)->load() - 50.0f) < 0.01f,
-                      "projet d'avant l'etape 4 : pas de compression tant que la piste n'est pas reecoutee");
+                      "projet d'avant l'etape 4 : compression a l'arret par defaut, inactive sans reecoute");
         }
 
         // L'histogramme des niveaux survit lui aussi à un enregistrement.
