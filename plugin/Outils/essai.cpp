@@ -96,7 +96,7 @@ namespace
 // sa propre instance, comme dans un projet FL. Le rôle et la source de chaque
 // piste sont devinés d'après le nom du fichier.
 //
-//   RogusEssai.exe --morceau <dossier des pistes> <dossier de sortie>
+//   RogusEssai.exe --morceau <dossier des pistes> <dossier de sortie> [quantité du démasquage, 50 par défaut]
 
 namespace
 {
@@ -249,7 +249,7 @@ namespace
         return ecart;
     }
 
-    int essayerMorceau (const juce::File& dossierPistes, const juce::File& dossierSortie)
+    int essayerMorceau (const juce::File& dossierPistes, const juce::File& dossierSortie, float quantiteDemasquage)
     {
         std::vector<Piste> pistes;
         double fs = 0.0;
@@ -410,13 +410,26 @@ namespace
 
         // --- 2. Correction fixe seule ---
         regler (true, false);
-        decrire ("2. CORRECTION FIXE SEULE (60 %)", jouerMorceau (pistes, nbEch, fs, tailleBloc, false), false);
+        const auto correctionSeule = jouerMorceau (pistes, nbEch, fs, tailleBloc, false);
+        decrire ("2. CORRECTION FIXE SEULE (60 %)", correctionSeule, false);
 
-        // --- 3. Réglages d'usine : correction fixe + démasquage ---
+        // --- 3. Correction fixe + démasquage (50 % = réglage d'usine) ---
         regler (true, true);
+
+        for (auto& p : pistes)
+            choisir (*p.moteur, IdParam::demasquageQuantite, quantiteDemasquage);
+
         const auto usine = jouerMorceau (pistes, nbEch, fs, tailleBloc, false);
+        std::cout << "(demasquage a " << quantiteDemasquage << " %)" << std::endl;
         ecrire (dossierSortie.getChildFile ("mix_avec_rogus.wav"),
-                decrire ("3. REGLAGES D'USINE (correction 60 %, demasquage 50 %)", usine, true), fs);
+                decrire ("3. CORRECTION 60 % + DEMASQUAGE", usine, true), fs);
+
+        // Chaque piste à part, pour mesurer ensuite ce que le démasquage lui retire.
+        for (size_t i = 0; i < pistes.size(); ++i)
+        {
+            ecrire (dossierSortie.getChildFile ("correction_" + pistes[i].nom + ".wav"), correctionSeule[i].sortie, fs);
+            ecrire (dossierSortie.getChildFile ("demasquage_" + pistes[i].nom + ".wav"), usine[i].sortie, fs);
+        }
 
         // --- 4. Même résultat quels que soient les blocs et l'ordre des pistes ---
         const auto petits = jouerMorceau (pistes, nbEch, fs, 256, false);
@@ -455,7 +468,8 @@ int main (int argc, char* argv[])
     juce::ScopedJuceInitialiser_GUI initialisation;
 
     if (argc >= 4 && juce::String (argv[1]) == "--morceau")
-        return essayerMorceau (juce::File (juce::String::fromUTF8 (argv[2])), juce::File (juce::String::fromUTF8 (argv[3])));
+        return essayerMorceau (juce::File (juce::String::fromUTF8 (argv[2])), juce::File (juce::String::fromUTF8 (argv[3])),
+                               argc > 4 ? juce::String (argv[4]).getFloatValue() : 50.0f);
 
     if (argc < 4)
     {
