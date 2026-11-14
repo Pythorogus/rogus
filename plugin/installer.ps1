@@ -1,4 +1,4 @@
-﻿# Copie le plugin compilé dans le dossier VST3 commun de Windows :
+﻿# Copie les plugins compilés dans le dossier VST3 commun de Windows :
 #   C:\Program Files\Common Files\VST3
 # C'est l'emplacement standard : FL Studio et les autres hôtes y cherchent
 # les plugins sans réglage particulier.
@@ -10,10 +10,23 @@
 # Fermer FL Studio avant : un plugin chargé est verrouillé et ne peut pas être remplacé.
 
 $ErrorActionPreference = 'Stop'
-$source = Join-Path $PSScriptRoot 'build\Rogus_artefacts\Release\VST3\Rogus.vst3'
+$racine = $PSScriptRoot
 $cible  = Join-Path $env:CommonProgramFiles 'VST3'
 
-if (-not (Test-Path $source)) { throw "Plugin introuvable : lancer d'abord .\plugin\compiler.ps1" }
+# Les deux plugins du projet. Les noms de dossier sont aussi les noms des
+# binaires à l'intérieur (Rogus.vst3, Rogus Master.vst3).
+$sources = @(
+    (Join-Path $racine 'build\Rogus_artefacts\Release\VST3\Rogus.vst3'),
+    (Join-Path $racine 'build\RogusMaster_artefacts\Release\VST3\Rogus Master.vst3')
+)
+
+foreach ($source in $sources)
+{
+    if (-not (Test-Path $source))
+    {
+        throw "Plugin introuvable : $source. Lancer d'abord .\plugin\compiler.ps1"
+    }
+}
 
 $identite = [Security.Principal.WindowsIdentity]::GetCurrent()
 $estAdmin = ([Security.Principal.WindowsPrincipal] $identite).IsInRole(
@@ -26,10 +39,28 @@ if (-not $estAdmin)
     Start-Process powershell -Verb RunAs -Wait `
         -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`""
 
-    $installe = Join-Path $cible 'Rogus.vst3\Contents\x86_64-win\Rogus.vst3'
-    if ((Test-Path $installe) -and ((Get-Item $installe).LastWriteTime -ge (Get-Item (Join-Path $source 'Contents\x86_64-win\Rogus.vst3')).LastWriteTime))
+    $toutInstalle = $true
+
+    foreach ($source in $sources)
     {
-        Write-Host "Plugin installé dans : $cible"
+        $nom = Split-Path $source -Leaf
+        $compile  = Join-Path $source 'Contents\x86_64-win'
+        $compile  = Join-Path $compile $nom
+        $installe = Join-Path $cible (Join-Path $nom 'Contents\x86_64-win')
+        $installe = Join-Path $installe $nom
+
+        $dejaAJour = (Test-Path $installe) -and
+                     ((Get-Item $installe).LastWriteTime -ge (Get-Item $compile).LastWriteTime)
+
+        if (-not $dejaAJour)
+        {
+            $toutInstalle = $false
+        }
+    }
+
+    if ($toutInstalle)
+    {
+        Write-Host "Plugins installés dans : $cible"
     }
     else
     {
@@ -41,7 +72,12 @@ if (-not $estAdmin)
 try
 {
     New-Item -ItemType Directory -Force $cible | Out-Null
-    Copy-Item $source $cible -Recurse -Force
+
+    foreach ($source in $sources)
+    {
+        Copy-Item $source $cible -Recurse -Force
+        Write-Host "Copié : $(Split-Path $source -Leaf)"
+    }
 }
 catch
 {

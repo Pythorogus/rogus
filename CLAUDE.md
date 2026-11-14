@@ -12,7 +12,7 @@ Trois plugins sont prévus, séparés (chacun son `.vst3`, sans mémoire partag�
   compression par rôle. Étapes 1 à 4 faites.
 - **`Rogus Master`** (master) : masterise dans FL Studio — il écoute le morceau,
   règle le gain vers une cible de volume perçu (LUFS) et limite la crête réelle.
-  En cours (étape 6).
+  Écrit, compilé, testé et installé le 14 novembre 2026 ; pas encore écouté.
 - **`Rogus Prise`** (prises) : contrôle des prises (ronflette, bruit, saturation).
   Plus tard (étape 5).
 
@@ -43,7 +43,7 @@ Principes décidés :
 3. **Orchestration** : communication entre instances, priorités, démasquage dynamique.
 4. **Compression** par rôle.
 5. **Plus tard** : `Rogus Prise`, un plugin séparé pour contrôler les prises (ronflette, bruit, saturation), et éventuellement des explications. Reporté après le master.
-6. **`Rogus Master`** (en cours) : plugin séparé, posé sur la piste master. Il écoute le morceau (analyse), règle le gain pour atteindre la cible de volume perçu (LUFS), puis applique un limiteur de crête réelle au plafond. Il affiche LUFS intégré et court terme, crête réelle, gain appliqué et réduction du limiteur. **Pas de carte des collisions** : retirée du plan le 14 novembre 2026, jugée redondante avec le démasquage et les fenêtres de piste. Il ne fait ni match de référence ni EQ spectrale ; `master.py` est retiré, le mastering se fait dans FL.
+6. **`Rogus Master`** (écrit, compilé, testé et installé le 14 novembre 2026 ; pas encore écouté) : plugin séparé, posé sur la piste master. Il écoute le morceau (analyse), règle le gain pour atteindre la cible de volume perçu (LUFS), puis applique un limiteur de crête réelle au plafond. Il affiche LUFS intégré et court terme, crête réelle, marge dynamique, gain appliqué et réduction du limiteur. **Pas de carte des collisions** : retirée du plan le 14 novembre 2026, jugée redondante avec le démasquage et les fenêtres de piste. Il ne fait ni match de référence ni EQ spectrale ; `master.py` est retiré, le mastering se fait dans FL.
 
 ### État du plugin (dossier `plugin/`)
 
@@ -57,6 +57,8 @@ Constat sur cette même capture (guitare électrique claire, rôle Rythmique, qu
 
 **Étape 4 écrite, compilée, testée sur signaux de synthèse, installée puis écoutée par Pierre** (14 novembre 2026) : compression par rôle. Chaque piste est écoutée comme pour l'EQ ; l'écoute remplit en plus un histogramme des niveaux, qui sert à poser le seuil sous les passages forts de la piste. Deux réglages s'ajoutent : `compressionActive` (**non** par défaut : elle est surtout utile sur la voix et la basse, et se coche au cas par cas) et `compressionQuantite` (50 %). Les tests passent : à 100 %, un écart de 12 dB entre passages forts et faibles devient 7,7 dB, et le volume global ne bouge que de −0,46 dB. **Écoute du 14 novembre 2026 : sur la basse, Pierre préfère avec la compression.** La voix et les autres rôles n'ont pas encore été écoutés : les réglages par rôle restent des points de départ. La première version ne compressait presque pas : son détecteur lisait l'échantillon isolé au lieu de l'enveloppe de crête (la même que celle de l'écoute), il se croyait donc 6 à 8 dB sous le seuil ; corrigé avant l'écoute. Voir « Fonctionnement de la compression » plus bas.
 
+**Étape 6 écrite, compilée, testée et installée** (14 novembre 2026) : `Rogus Master`, plugin séparé posé sur la piste master. Il écoute le morceau (analyse du LUFS et de la crête réelle), calcule le gain pour atteindre la cible choisie (Streaming −14 ou Fort −11), puis applique ce gain et un limiteur de crête réelle à −1 dBTP. Aucune mémoire partagée avec `Rogus`, aucun compresseur, aucune EQ, pas de match de référence. **Pas encore écouté dans FL Studio** ; les tests hors FL passent. Voir « Fonctionnement de Rogus Master » plus bas.
+
 | Fichier | Rôle |
 |---|---|
 | `CMakeLists.txt` | projet CMake ; télécharge JUCE 8.0.9 (version figée) à la première configuration |
@@ -64,10 +66,16 @@ Constat sur cette même capture (guitare électrique claire, rôle Rythmique, qu
 | `Source/Orchestre.*` | mémoire partagée entre les instances du plugin : chacune y annonce ce qu'elle joue |
 | `Source/PluginProcessor.*` | moteur audio : écoute de la piste (spectre et dynamique), filtrage, compression, annonces et démasquage, sauvegarde |
 | `Source/PluginEditor.*` | fenêtre : trois menus, courbe appliquée, correction fixe, compression, démasquage, textes d'état |
-| `Tests/tests.cpp` | tests du moteur hors FL Studio |
-| `compiler.ps1` | configure et compile en Release |
-| `tester.ps1` | compile et lance les tests |
-| `installer.ps1` | copie le `.vst3` dans `C:\Program Files\Common Files\VST3` (emplacement choisi par Pierre) ; se relance avec les droits administrateur, Windows demande confirmation |
+| `Source/Textes.h` | décodage UTF-8 (`rogus::fr`) partagé par les deux plugins |
+| `SourceMaster/MasterProcessor.*` | Rogus Master : écoute, calage du gain, paramètres, sauvegarde |
+| `SourceMaster/MasterEditor.*` | fenêtre de Rogus Master : cible, compteurs, bouton d'écoute |
+| `SourceMaster/MesureLoudness.*` | mesure LUFS (BS.1770-4) et crête réelle (suréchantillonnage 4x) |
+| `SourceMaster/Limiteur.*` | limiteur de crête réelle avec anticipation |
+| `Tests/tests.cpp` | tests du moteur de piste hors FL Studio |
+| `TestsMaster/tests.cpp` | tests de Rogus Master hors FL Studio |
+| `compiler.ps1` | configure et compile les deux plugins en Release |
+| `tester.ps1` | compile et lance les tests des deux plugins |
+| `installer.ps1` | copie les deux `.vst3` dans `C:\Program Files\Common Files\VST3` (emplacement choisi par Pierre) ; se relance avec les droits administrateur, Windows demande confirmation |
 
 Fonctionnement de l'EQ fixe :
 
@@ -118,6 +126,17 @@ Réglages par rôle (table `tableRoles` de `Correction.cpp`) : la basse est vali
 | Voix | 3 | 10 ms | 120 ms | 8 dB |
 | Nappe | 2 | 40 ms | 300 ms | 5 dB |
 
+Fonctionnement de Rogus Master (étape 6) :
+
+1. **Plugin séparé** : un `.vst3` à part, posé sur l'insert master de FL. Il ne partage aucune mémoire avec les instances de `Rogus` : il n'a besoin que du signal du bus. Mono ou stéréo, latence annoncée à l'hôte (celle du limiteur et du suréchantillonnage).
+2. **Deux réglages** : `cible` (menu : Streaming −14 ou Fort −11) et `gain` (dB, calculé par l'écoute, enregistré et automatisable). Le plafond est fixe à −1 dBTP, sans champ libre.
+3. **Écoute** : bouton « Écouter le morceau » ; on joue le morceau en entier. Le plugin mesure le LUFS et la crête de ce qu'il sort, sans chercher à atteindre la cible. À l'arrêt (« Arrêter et régler »), il calcule `gain += cible − loudness mesurée` et l'applique. Le gain est lissé sur 50 ms.
+4. **Mesure** : BS.1770-4 (filtre K, blocs de 400 ms recouvrés à 75 %, portes à −70 et −10 LU), LUFS court terme sur 3 s, crête réelle par suréchantillonnage 4x. La mesure intégrée repart de zéro à chaque écoute ; le silence ne compte pas.
+5. **Changement de cible** : la dernière mesure et le gain associé sont gardés dans le projet. Changer de cible recalcule le gain sans réécouter. Modifier le mix demande une nouvelle écoute.
+6. **Limiteur** : suréchantillonné 4x, anticipation de 5 ms, maximum glissant, attaque 1 ms, relâchement 150 ms. La crête réelle de sortie est tenue à −1 dBTP. En dessous du plafond, il est transparent.
+7. **Sauvegarde** : les paramètres (`cible`, `gain`) et la dernière mesure sont dans l'état du plugin. Nouveau plugin : pas de conversion d'ancien format.
+8. **Tests** (`TestsMaster/tests.cpp`) : sinus 1 kHz à −20 dBFS = −20 LUFS ; gating du silence ; sinus fs/4 déphasé = 0 dBTP ; plafond du limiteur ; transparence sous le plafond ; calage +6 dB pour −14 ; +3 dB en passant à −11 ; sauvegarde.
+
 Limites connues de l'étape 3 :
 
 - Les instances se voient dans FL Studio tant qu'elles sont chargées normalement. Si le texte d'état affichait « aucune autre piste Rogus visible » avec plusieurs instances (plugin « bridgé » par FL, par exemple), elles seraient isolées dans des programmes séparés et il faudrait une vraie communication entre programmes.
@@ -136,6 +155,18 @@ Limites connues de l'étape 4 :
 - L'histogramme ne compte pas le silence sous −55 dBFS : une piste très faible est mesurée sur peu d'événements, et une piste entièrement sous ce seuil n'a pas de compression.
 - La fenêtre et la compression ont été vérifiées dans FL Studio sur la basse. La voix, les autres rôles et l'identité écoute / export ne sont pas encore vérifiés.
 
+Limites connues de l'étape 6 :
+
+- **Pas encore écouté dans FL Studio** : les tests portent sur des signaux de synthèse.
+- La mesure est faite en jouant, pas sur le fichier exporté : elle peut différer de 0,2 à 0,5 LU d'un analyseur hors ligne, et elle ne vaut que pour ce qui a été joué. Arrêter l'écoute au milieu ne mesure que ce passage.
+- Le calage se fait en une passe : le limiteur modifie légèrement la loudness, donc le résultat peut rester à quelques dixièmes de la cible. Une seconde écoute affine.
+- Deux cibles seulement, plafond fixe à −1 dBTP, pas de compresseur, pas d'EQ, pas de match de référence.
+- Le limiteur est simple (5 ms d'anticipation, 4x) : il protège la crête, il ne change pas le grain du morceau.
+- Le plugin ne détecte pas la fin du morceau : c'est à l'utilisateur de cliquer sur « Arrêter et régler ».
+- La latence est celle du limiteur et du suréchantillonnage ; FL la compense, mais un enregistrement en direct dans FL en tient compte différemment.
+- CPU : suréchantillonnage 4x sur le master.
+- Pas de rendu de fichier : le plugin traite en temps réel, l'export se fait par FL.
+
 Limites connues de l'étape 2 :
 
 - **Les cibles (rôles, sources, sons) sont des points de départ choisis sans mesure sur de vraies prises** (tableaux dans `Correction.cpp`). Les rôles Arpège, Snare, Hits et Nappe et les décalages de source et de son sont les plus devinés. C'est le premier réglage à affiner à l'oreille. Pour cela il faut des pistes isolées de Pierre : ses 7 morceaux analysés (13 novembre 2026) sont des mixes complets, inutilisables pour caler une cible par instrument.
@@ -151,7 +182,7 @@ Outils nécessaires (installés sur ce poste avec winget) : Visual Studio Build 
 .\plugin\installer.ps1
 ```
 
-Les tests vérifient des propriétés mesurables (réponse des filtres, bornes de la correction, neutralité à 0 %, déroulement d'une écoute, sauvegarde, courbe et volume du compresseur). Ils ne disent rien de la qualité sonore. Les relancer après toute modification du moteur.
+Les tests vérifient des propriétés mesurables (deux suites : réponse des filtres, bornes de la correction, neutralité à 0 %, déroulement d'une écoute, sauvegarde, courbe et volume du compresseur ; mesure LUFS, crête réelle, plafond du limiteur, calage du gain). Ils ne disent rien de la qualité sonore. Les relancer après toute modification du moteur.
 
 Fermer FL Studio avant d'installer (un plugin chargé est verrouillé). Ce dossier est l'emplacement VST3 standard : dans FL Studio, il suffit de relancer la recherche (Options > Manage plugins > Find installed plugins).
 
@@ -159,7 +190,7 @@ Règles du code audio : pas d'allocation mémoire ni d'attente sur un verrou dan
 
 **Règle de compatibilité (exigence de Pierre) : une nouvelle version doit toujours reprendre les réglages enregistrés par la précédente.** Charger la nouvelle version dans un projet existant ne doit rien faire perdre.
 
-- Ne jamais supprimer ni renommer un identifiant de paramètre (`role`, `source`, `son`, `correctionActive`, `quantite`, `priorite`, `demasquageActif`, `demasquageQuantite`, `reactivite`, `compressionActive`, `compressionQuantite`), ni les codes du plugin (`Rogs` / `Rgs1`).
+- Ne jamais supprimer ni renommer un identifiant de paramètre (`role`, `source`, `son`, `correctionActive`, `quantite`, `priorite`, `demasquageActif`, `demasquageQuantite`, `reactivite`, `compressionActive`, `compressionQuantite` pour `Rogus` ; `cible`, `gain` pour `Rogus Master`), ni les codes des plugins (`Rogs` / `Rgs1` pour `Rogus`, `Rgs3` pour `Rogus Master` ; `Rgs2` réservé à `Rogus Prise`).
 - Les listes de choix ne s'enregistrent que par leur numéro : on n'en réordonne ni n'en retire jamais une entrée ; les nouvelles s'ajoutent **à la fin**.
 - Si un changement incompatible est vraiment nécessaire : augmenter `versionEtat` dans `PluginProcessor.cpp`, écrire la conversion depuis la version précédente dans `migrerEtat`, et ajouter un test qui fabrique un faux ancien état (voir `etatEtape2` dans `Tests/tests.cpp`) et vérifie ce qui est repris. Les tests doivent échouer si on retire la conversion.
 - Formats déjà connus : étape 1 et étape 2 (sans numéro de version, converties à l'ouverture), version 3 actuelle (trois menus). L'ancien rôle de l'étape 2 (6 choix) est converti en rôle + source.

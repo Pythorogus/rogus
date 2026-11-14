@@ -81,3 +81,62 @@ target_link_libraries(Rogus
         juce::juce_recommended_lto_flags
         juce::juce_recommended_warning_flags
 )
+
+# --- Rogus Master -----------------------------------------------------------
+# Plugin séparé, posé sur la piste master. Il ne partage aucune mémoire avec
+# les instances de Rogus : il n'a besoin que du signal du bus master.
+juce_add_plugin(RogusMaster
+    PRODUCT_NAME              "Rogus Master"
+    COMPANY_NAME              "Rogus"
+    PLUGIN_MANUFACTURER_CODE  Rogs
+    PLUGIN_CODE               Rgs3
+    FORMATS                   VST3
+    VST3_CATEGORIES           Fx
+    IS_SYNTH                  FALSE
+    NEEDS_MIDI_INPUT          FALSE
+    NEEDS_MIDI_OUTPUT         FALSE
+    IS_MIDI_EFFECT            FALSE
+    COPY_PLUGIN_AFTER_BUILD   FALSE
+)
+
+set(SOURCES_MASTER
+    SourceMaster/Limiteur.cpp
+    SourceMaster/MesureLoudness.cpp
+    SourceMaster/MasterProcessor.cpp
+    SourceMaster/MasterEditor.cpp
+)
+
+target_sources(RogusMaster PRIVATE ${SOURCES_MASTER})
+target_include_directories(RogusMaster PRIVATE Source)
+
+target_compile_definitions(RogusMaster PUBLIC
+    JUCE_WEB_BROWSER=0
+    JUCE_USE_CURL=0
+    JUCE_VST3_CAN_REPLACE_VST2=0
+)
+
+target_compile_options(RogusMaster PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
+
+target_link_libraries(RogusMaster
+    PRIVATE
+        juce::juce_audio_utils
+        juce::juce_dsp
+    PUBLIC
+        juce::juce_recommended_config_flags
+        juce::juce_recommended_lto_flags
+        juce::juce_recommended_warning_flags
+)
+
+# Tests de Rogus Master, lancés sans hôte sur des signaux de synthèse.
+juce_add_console_app(RogusMasterTests PRODUCT_NAME "RogusMasterTests")
+target_sources(RogusMasterTests PRIVATE TestsMaster/tests.cpp ${SOURCES_MASTER})
+target_include_directories(RogusMasterTests PRIVATE Source SourceMaster)
+target_compile_definitions(RogusMasterTests PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
+target_compile_options(RogusMasterTests PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
+target_link_libraries(RogusMasterTests
+    PRIVATE
+        juce::juce_audio_utils
+        juce::juce_dsp
+        juce::juce_recommended_config_flags
+        juce::juce_recommended_warning_flags
+)

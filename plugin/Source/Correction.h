@@ -3,6 +3,7 @@
 #include <array>
 #include <vector>
 #include <juce_core/juce_core.h>
+#include "Textes.h"
 
 // Cœur de l'EQ fixe par rôle, sans dépendance au plugin ni à l'interface :
 //   - la table des rôles (ce qu'on attend de chaque instrument) ;
@@ -15,7 +16,6 @@ namespace rogus
 {
 
 // Les textes accentués doivent être décodés explicitement en UTF-8.
-inline juce::String fr (const char* texte) { return juce::String::fromUTF8 (texte); }
 
 // --- Découpage en fréquences -------------------------------------------------
 
