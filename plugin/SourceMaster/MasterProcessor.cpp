@@ -8,6 +8,13 @@ namespace
     // compromis pour les encodeurs et les plateformes.
     constexpr float plafondDb = -1.0f;
 
+    // Marge de sécurité interne. Le limiteur travaille sur un signal
+    // suréchantillonné 4x ; le filtrage de reconstruction peut rajouter
+    // quelques dixièmes de dB sur les crêtes réelles (mesuré ~0,2 dB sur un
+    // morceau réel). On vise donc 0,5 dB sous le plafond affiché pour que la
+    // sortie finisse sous -1 dBTP. Le compteur affiche la valeur réelle.
+    constexpr float margeSureteDb = 0.5f;
+
     constexpr float gainMinDb = -24.0f, gainMaxDb = 24.0f;
 }
 
@@ -174,7 +181,7 @@ void RogusMasterProcessor::processBlock (juce::AudioBuffer<float>& tampon, juce:
     const float gain = paramGain->load();
     float reduction = 0.0f;
 
-    limiteur.traiter (tampon, canaux, gain, plafondDb, reduction);
+    limiteur.traiter (tampon, canaux, gain, plafondDb - margeSureteDb, reduction);
     mesure.traiter (tampon, canaux);
 
     reductionVue.store (reduction);

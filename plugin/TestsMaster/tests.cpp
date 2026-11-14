@@ -239,6 +239,21 @@ int main()
                   "sauvegarde : cible, gain et mesure retrouves");
     }
 
+    std::cout << "Plafond du processeur" << std::endl;
+    {
+        RogusMasterProcessor p;
+        preparer (p);
+        choisir (p, IdParamMaster::cible, 0.0f);
+
+        // Sinus a 0 dBFS : le limiteur interne vise 0,5 dB sous -1 dBTP pour
+        // que la reconstruction ne repasse pas au-dessus du plafond.
+        jouerSinus (p, 2.0, 1.0f, 1000.0);
+
+        verifier (p.lireCreteReelle() <= -1.0f,
+                  "processeur : la crete reelle de sortie reste sous -1 dBTP (obtenu "
+                  + juce::String (p.lireCreteReelle(), 2) + " dBTP)");
+    }
+
     std::cout << (nbEchecs == 0 ? "\nTous les tests passent." : "\nTests en echec : "
                                                                    + juce::String (nbEchecs))
               << std::endl;
