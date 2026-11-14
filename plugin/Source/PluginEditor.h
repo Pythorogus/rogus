@@ -2,6 +2,7 @@
 
 #include <juce_audio_utils/juce_audio_utils.h>
 #include "PluginProcessor.h"
+#include "Habillage.h"
 
 // Dessine la courbe d'égalisation réellement appliquée à la piste.
 // Elle est calculée avec les mêmes filtres que l'audio.
@@ -10,6 +11,8 @@ class CourbeCorrection : public juce::Component
 public:
     explicit CourbeCorrection (RogusProcessor& m) : moteur (m) {}
     void paint (juce::Graphics&) override;
+
+    juce::Colour accent { rogus::console::ambre };
 
 private:
     RogusProcessor& moteur;
@@ -30,30 +33,34 @@ public:
 private:
     void timerCallback() override;
     juce::String texteEtat() const;
+    juce::String texteCompression() const;
     juce::String texteDemasquage() const;
+    void suivrePiste (bool forcer);
 
     RogusProcessor& moteur;
 
-    juce::Label etiquetteRole, etiquetteSource, etiquetteSon, etiquetteQuantite, etat;
+    // L'habillage est déclaré avant les contrôles : il doit leur survivre.
+    rogus::HabillageConsole habillage;
+
     juce::ComboBox choixRole, choixSource, choixSon;
     CourbeCorrection courbe;
-    juce::ToggleButton boutonActif { "Correction fixe" };
-    juce::Slider curseurQuantite;
     juce::TextButton boutonEcoute;
 
-    // Compression (étape 4)
-    juce::String texteCompression() const;
-    juce::Label etatCompression, etiquetteCompQuantite;
-    juce::ToggleButton boutonCompression { "Compression" };
-    juce::Slider curseurCompQuantite;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> attacheCompression;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> attacheCompQuantite;
+    // Trois cartes, dans l'ordre du trajet du son : correction fixe,
+    // compression, démasquage.
+    juce::ToggleButton boutonActif { "Correction fixe" };
+    rogus::Potard potardQuantite { "Quantité", 76 };
+    juce::Label etat;
 
-    // Démasquage dynamique (étape 3)
-    juce::Label etatDemasquage, etiquetteDemQuantite, etiquettePriorite, etiquetteReactivite;
+    juce::ToggleButton boutonCompression { "Compression" };
+    rogus::Potard potardCompQuantite { "Quantité", 76 };
+    juce::Label etatCompression;
+
     juce::ToggleButton boutonDemasquage;
-    juce::Slider curseurDemQuantite, curseurReactivite;
+    rogus::Potard potardDemQuantite { "Quantité", 60 };
+    rogus::Potard potardReactivite { "Réactivité", 60 };
     juce::ComboBox choixPriorite;
+    juce::Label etatDemasquage;
 
     // Les « attaches » relient un contrôle à un paramètre dans les deux sens :
     // bouger le contrôle change le paramètre, et une automation de l'hôte fait
@@ -62,12 +69,18 @@ private:
     using AttacheChoix   = juce::AudioProcessorValueTreeState::ComboBoxAttachment;
     using AttacheBouton  = juce::AudioProcessorValueTreeState::ButtonAttachment;
     using AttacheCurseur = juce::AudioProcessorValueTreeState::SliderAttachment;
-    std::unique_ptr<AttacheChoix> attacheRole, attacheSource, attacheSon;
-    std::unique_ptr<AttacheBouton> attacheActif;
-    std::unique_ptr<AttacheCurseur> attacheQuantite;
-    std::unique_ptr<AttacheChoix> attachePriorite;
-    std::unique_ptr<AttacheBouton> attacheDemasquage;
-    std::unique_ptr<AttacheCurseur> attacheDemQuantite, attacheReactivite;
+    std::unique_ptr<AttacheChoix> attacheRole, attacheSource, attacheSon, attachePriorite;
+    std::unique_ptr<AttacheBouton> attacheActif, attacheCompression, attacheDemasquage;
+    std::unique_ptr<AttacheCurseur> attacheQuantite, attacheCompQuantite, attacheDemQuantite, attacheReactivite;
+
+    // Mise en page (calculée dans resized, dessinée dans paint).
+    juce::Rectangle<int> cadreCourbe, ligneCourbe;
+    std::array<juce::Rectangle<int>, 3> cartes;
+
+    // Ce que l'hôte dit de la piste, et le résumé affiché au-dessus de la courbe.
+    rogus::InfosPiste piste;
+    juce::String etatCourt;
+    juce::Colour pastille { rogus::console::eteint };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (RogusEditor)
 };

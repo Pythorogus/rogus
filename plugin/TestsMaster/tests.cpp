@@ -24,6 +24,33 @@ namespace
     constexpr double fs = 48000.0;
     constexpr int tailleBloc = 512;
 
+    // Dessine la fenêtre hors écran. Si la variable d'environnement
+    // ROGUS_CAPTURE donne un dossier, l'image y est enregistrée : cela permet
+    // de vérifier la mise en page sans ouvrir FL Studio.
+    bool dessinerFenetre (juce::AudioProcessor& p, const juce::String& nomFichier)
+    {
+        std::unique_ptr<juce::AudioProcessorEditor> fenetre (p.createEditor());
+
+        if (fenetre == nullptr || fenetre->getWidth() <= 0 || fenetre->getHeight() <= 0)
+            return false;
+
+        const auto image = fenetre->createComponentSnapshot (fenetre->getLocalBounds());
+        const auto dossier = juce::SystemStats::getEnvironmentVariable ("ROGUS_CAPTURE", {});
+
+        if (dossier.isNotEmpty())
+        {
+            const auto fichier = juce::File (dossier).getChildFile (nomFichier);
+            fichier.deleteFile();
+            juce::FileOutputStream flux (fichier);
+
+            const bool ecrit = flux.openedOk() && juce::PNGImageFormat().writeImageToStream (juce::SoftwareImageType().convert (image), flux);
+            std::cout << "         capture " << (ecrit ? "enregistree : " : "impossible : ")
+                      << fichier.getFullPathName() << std::endl;
+        }
+
+        return image.isValid();
+    }
+
     // Remplit un bloc de sinus stéréo, en gardant la phase d'un bloc à l'autre.
     struct Sinus
     {
@@ -365,6 +392,22 @@ int main()
         verifier (p.lireCreteReelle() <= -1.0f,
                   "processeur : la crete reelle de sortie reste sous -1 dBTP (obtenu "
                   + juce::String (p.lireCreteReelle(), 2) + " dBTP)");
+    }
+
+    std::cout << "Fenetre, nom et couleur de piste" << std::endl;
+    {
+        // Un hôte qui ne dit rien de la piste : pas de nom, pas de couleur,
+        // et la fenêtre se dessine quand même (accent ambre).
+        RogusMasterProcessor p;
+        verifier (p.piste.lire().nom.isEmpty() && ! p.piste.lire().aCouleur, "hote muet : pas d'etiquette, pas de couleur");
+        verifier (dessinerFenetre (p, "master-defaut.png"), "hote muet : la fenetre se dessine");
+
+        juce::AudioProcessor::TrackProperties proprietes;
+        proprietes.name = juce::String ("Master");
+        proprietes.colour = juce::Colour (0xff6fcf8e);
+        p.updateTrackProperties (proprietes);
+        verifier (p.piste.lire().nom == "Master" && p.piste.lire().aCouleur, "nom et couleur de piste recus");
+        verifier (dessinerFenetre (p, "master-piste.png"), "piste nommee et coloree : la fenetre se dessine");
     }
 
     std::cout << (nbEchecs == 0 ? "\nTous les tests passent." : "\nTests en echec : "

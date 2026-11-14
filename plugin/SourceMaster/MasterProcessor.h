@@ -6,6 +6,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "Limiteur.h"
 #include "MesureLoudness.h"
+#include "Piste.h"
 
 // Identifiants des paramètres de Rogus Master. Comme pour le plugin de piste,
 // une fois un projet enregistré, on ne les renomme plus.
@@ -77,6 +78,12 @@ public:
     void mettreAJour();
 
     juce::AudioProcessorValueTreeState parametres;
+
+    // --- Nom et couleur de la piste, si l'hôte les donne ---
+    // Tous les hôtes ne le font pas : sans appel, `piste` reste vide et la
+    // fenêtre garde ses valeurs par défaut (pas d'étiquette, accent ambre).
+    void updateTrackProperties (const TrackProperties& proprietes) override  { piste.recevoir (proprietes); }
+    rogus::Piste piste;
 
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout creerParametres();

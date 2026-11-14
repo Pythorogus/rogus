@@ -4,6 +4,7 @@
 #include <juce_dsp/juce_dsp.h>
 #include "Correction.h"
 #include "Orchestre.h"
+#include "Piste.h"
 
 // Identifiants des paramètres. L'hôte s'en sert pour enregistrer les réglages
 // et l'automation : une fois un vrai projet FL sauvegardé, on ne les renomme plus.
@@ -104,6 +105,12 @@ public:
     static constexpr double dureeEcouteMin = 3.0;
 
     juce::AudioProcessorValueTreeState parametres;
+
+    // --- Nom et couleur de la piste, si l'hôte les donne ---
+    // Tous les hôtes ne le font pas : sans appel, `piste` reste vide et la
+    // fenêtre garde ses valeurs par défaut (pas d'étiquette, accent ambre).
+    void updateTrackProperties (const TrackProperties& proprietes) override  { piste.recevoir (proprietes); }
+    rogus::Piste piste;
 
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout creerParametres();

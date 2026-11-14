@@ -7,6 +7,7 @@
 #include <cmath>
 #include <iostream>
 #include "../Source/PluginProcessor.h"
+#include "../Source/Habillage.h"
 
 namespace
 {
@@ -21,6 +22,33 @@ namespace
 
     constexpr double fs = 48000.0;
     constexpr int tailleBloc = 512;
+
+    // Dessine la fenêtre hors écran. Si la variable d'environnement
+    // ROGUS_CAPTURE donne un dossier, l'image y est enregistrée : cela permet
+    // de vérifier la mise en page sans ouvrir FL Studio.
+    bool dessinerFenetre (juce::AudioProcessor& p, const juce::String& nomFichier)
+    {
+        std::unique_ptr<juce::AudioProcessorEditor> fenetre (p.createEditor());
+
+        if (fenetre == nullptr || fenetre->getWidth() <= 0 || fenetre->getHeight() <= 0)
+            return false;
+
+        const auto image = fenetre->createComponentSnapshot (fenetre->getLocalBounds());
+        const auto dossier = juce::SystemStats::getEnvironmentVariable ("ROGUS_CAPTURE", {});
+
+        if (dossier.isNotEmpty())
+        {
+            const auto fichier = juce::File (dossier).getChildFile (nomFichier);
+            fichier.deleteFile();
+            juce::FileOutputStream flux (fichier);
+
+            const bool ecrit = flux.openedOk() && juce::PNGImageFormat().writeImageToStream (juce::SoftwareImageType().convert (image), flux);
+            std::cout << "         capture " << (ecrit ? "enregistree : " : "impossible : ")
+                      << fichier.getFullPathName() << std::endl;
+        }
+
+        return image.isValid();
+    }
 
     // Bruit rose : même énergie dans chaque octave, donc niveau égal dans
     // toutes nos bandes. C'est un signal de test « plat » pour l'oreille.
@@ -1063,6 +1091,42 @@ int main()
         relu.setStateInformation (actuel.getData(), (int) actuel.getSize());
         verifier (base.lireMesure().refValide && relu.lireMesure().refValide && relu.lireMesure().refDb == base.lireMesure().refDb,
                   "sauvegarde : repere de niveau du demasquage retrouve");
+    }
+
+    std::cout << std::endl << "Fenetre, nom et couleur de piste" << std::endl;
+    {
+        // Un hôte qui ne dit rien de la piste (ce n'est pas obligatoire) : pas
+        // de nom, pas de couleur, et la fenêtre se dessine avec l'ambre.
+        RogusProcessor p;
+        const auto vide = p.piste.lire();
+        verifier (vide.nom.isEmpty() && ! vide.aCouleur && rogus::console::accentPour (vide) == rogus::console::ambre,
+                  "hote muet : pas d'etiquette, accent ambre");
+        verifier (dessinerFenetre (p, "rogus-defaut.png"), "hote muet : la fenetre se dessine");
+
+        // Un hôte qui ne donne que le nom : la couleur reste celle par défaut.
+        juce::AudioProcessor::TrackProperties proprietes;
+        proprietes.name = juce::String ("  Guitare lead  ");
+        p.updateTrackProperties (proprietes);
+        verifier (p.piste.lire().nom == "Guitare lead" && ! p.piste.lire().aCouleur,
+                  "nom seul : etiquette recue, accent ambre garde");
+
+        // Nom et couleur : la couleur de la piste devient l'accent.
+        proprietes.colour = juce::Colour (0xff3fa7ff);
+        p.updateTrackProperties (proprietes);
+        verifier (p.piste.lire().aCouleur && rogus::console::accentPour (p.piste.lire()) == juce::Colour (0xff3fa7ff),
+                  "couleur claire : reprise telle quelle comme accent");
+        verifier (dessinerFenetre (p, "rogus-piste.png"), "piste nommee et coloree : la fenetre se dessine");
+
+        // Couleurs inutilisables telles quelles : grise (piste sans couleur
+        // choisie), transparente, ou trop sombre pour le fond graphite.
+        rogus::InfosPiste infos;
+        infos.aCouleur = true;
+        infos.couleur = juce::Colour (0xff808080);
+        verifier (rogus::console::accentPour (infos) == rogus::console::ambre, "couleur grise : accent ambre");
+        infos.couleur = juce::Colour (0x00ff0000);
+        verifier (rogus::console::accentPour (infos) == rogus::console::ambre, "couleur transparente : accent ambre");
+        infos.couleur = juce::Colour (0xff101060);
+        verifier (rogus::console::accentPour (infos).getPerceivedBrightness() >= 0.5f, "couleur sombre : eclaircie pour rester lisible");
     }
 
     std::cout << std::endl << (nbEchecs == 0 ? "Tous les tests passent." : "Tests en echec : " + juce::String (nbEchecs)) << std::endl;

@@ -67,6 +67,9 @@ Constat sur cette même capture (guitare électrique claire, rôle Rythmique, qu
 | `Source/PluginProcessor.*` | moteur audio : écoute de la piste (spectre et dynamique), filtrage, compression, annonces et démasquage, sauvegarde |
 | `Source/PluginEditor.*` | fenêtre : trois menus, courbe appliquée, correction fixe, compression, démasquage, textes d'état |
 | `Source/Textes.h` | décodage UTF-8 (`rogus::fr`) partagé par les deux plugins |
+| `Source/Habillage.*` | habillage « Console » partagé par les deux fenêtres : couleurs, polices, logo, potards, interrupteurs, menus, boutons |
+| `Source/Piste.h` | nom et couleur de la piste reçus de l'hôte (`updateTrackProperties`), partagé par les deux plugins |
+| `Polices/` | Inter et JetBrains Mono (licence OFL, fichiers de licence joints), embarquées dans chaque `.vst3` |
 | `SourceMaster/MasterProcessor.*` | Rogus Master : écoute, calage du gain, paramètres, sauvegarde |
 | `SourceMaster/MasterEditor.*` | fenêtre de Rogus Master : cible, compteurs, bouton d'écoute |
 | `SourceMaster/MesureLoudness.*` | mesure LUFS (BS.1770-4) et crête réelle (suréchantillonnage 4x) |
@@ -76,6 +79,14 @@ Constat sur cette même capture (guitare électrique claire, rôle Rythmique, qu
 | `compiler.ps1` | configure et compile les deux plugins en Release |
 | `tester.ps1` | compile et lance les tests des deux plugins |
 | `installer.ps1` | copie les deux `.vst3` dans `C:\Program Files\Common Files\VST3` (emplacement choisi par Pierre) ; se relance avec les droits administrateur, Windows demande confirmation |
+
+Fenêtres (v0.4, 14 novembre 2026) : habillage « Console » repris de la maquette A choisie par Pierre (canevas « Rogus — propositions UI »), avec le logo n°2 (deux ondes qui se chevauchent). Fond graphite, un seul accent de couleur, potards pour les quantités, interrupteurs, trois cartes dans l'ordre du trajet du son (correction fixe, compression, démasquage). `Rogus` fait 700 × 768, `Rogus Master` 620 × 576 (maquette réduite à environ 85 % pour tenir dans FL sur un écran 1080p).
+
+- **Couleur et nom de la piste** : si l'hôte les donne (`updateTrackProperties`, côté VST3 le « channel context »), la couleur de la piste remplace l'ambre et son nom s'affiche en étiquette à côté du titre. **Valeurs par défaut exigées par Pierre** (le plugin peut servir ailleurs que dans FL) : pas de nom reçu = pas d'étiquette ; pas de couleur reçue, couleur grise (piste sans couleur choisie) ou transparente = ambre. Une couleur trop sombre est éclaircie (`accentPour` dans `Habillage.cpp`). **Pas encore vérifié que FL Studio envoie ces informations.**
+- **Polices embarquées** : environ 1,8 Mo de plus par `.vst3` (6,5 → 8,3 Mo). Si une police ne se charge pas, repli sur Segoe UI / Consolas.
+- **Aucun paramètre ne change** : seule la fenêtre est refaite, les projets existants ne perdent rien.
+- **Rendu hors FL** : les tests dessinent chaque fenêtre hors écran ; avec la variable d'environnement `ROGUS_CAPTURE` (un dossier, par exemple `pluginuild\captures`), ils y enregistrent les images. Vérifié ainsi le 14 novembre 2026 ; **pas encore vu dans FL Studio**.
+- Écarts voulus avec la maquette : la zone violette de la courbe s'appelle « zone du rôle » (c'est ce qu'elle montre), le menu de priorité reste accessible dans la carte Démasquage, et le texte d'état de Rogus Master est au-dessus du bouton.
 
 Fonctionnement de l'EQ fixe :
 
@@ -197,7 +208,7 @@ Règles du code audio : pas d'allocation mémoire ni d'attente sur un verrou dan
 - Formats déjà connus : étape 1 et étape 2 (sans numéro de version, converties à l'ouverture), version 3 actuelle (trois menus). L'ancien rôle de l'étape 2 (6 choix) est converti en rôle + source.
 - Ce n'est vérifié que par les tests, sur des états fabriqués : **pas encore sur un vrai projet FL enregistré avec l'étape 2**.
 
-**Licence** : JUCE est sous AGPL v3 (ou licence commerciale). Sans conséquence en usage personnel, contraignant en cas de distribution.
+**Licence** : JUCE est sous AGPL v3 (ou licence commerciale). Sans conséquence en usage personnel, contraignant en cas de distribution. Les polices Inter et JetBrains Mono sont sous licence OFL (libre, redistribution permise avec leur fichier de licence).
 
 Abandonné pour l'instant : profils de style et détection de genre pour le mastering, interface web locale, carte des collisions entre pistes (redondante avec ce que montre déjà le démasquage).
 
@@ -205,7 +216,7 @@ Abandonné pour l'instant : profils de style et détection de genre pour le mast
 
 - Code, commentaires et messages utilisateur en français.
 - Commentaires pédagogiques : expliquer le pourquoi des étapes audio.
-- **Numéro de version** : commun aux deux plugins, à deux chiffres (`0.X`), fixé par la ligne `project(RogusPlugin VERSION 0.X.0 ...)` de `plugin/CMakeLists.txt` (le troisième chiffre reste à 0 : CMake et l'hôte en veulent trois). Il est affiché en petit, en clair, en bas à droite de chaque fenêtre (« v0.2 »), pour vérifier que FL Studio a bien chargé la dernière version. **Claude gère le versionnage lui-même (décision de Pierre, 14 novembre 2026) : à chaque modification du code d'un plugin, augmenter X de 1 sans le demander, avant de compiler et d'installer, mettre à jour « Version actuelle » ci-après, et annoncer le nouveau numéro à Pierre dans le compte rendu.** Une modification qui ne touche que la documentation ou les tests ne change pas le numéro. Version actuelle : 0.3 (14 novembre 2026, sons Chaud, Mordant et Serré).
+- **Numéro de version** : commun aux deux plugins, à deux chiffres (`0.X`), fixé par la ligne `project(RogusPlugin VERSION 0.X.0 ...)` de `plugin/CMakeLists.txt` (le troisième chiffre reste à 0 : CMake et l'hôte en veulent trois). Il est affiché en petit, en clair, en haut à droite de chaque fenêtre, dans l'en-tête (« v0.4 »), pour vérifier que FL Studio a bien chargé la dernière version. **Claude gère le versionnage lui-même (décision de Pierre, 14 novembre 2026) : à chaque modification du code d'un plugin, augmenter X de 1 sans le demander, avant de compiler et d'installer, mettre à jour « Version actuelle » ci-après, et annoncer le nouveau numéro à Pierre dans le compte rendu.** Une modification qui ne touche que la documentation ou les tests ne change pas le numéro. Version actuelle : 0.4 (14 novembre 2026, fenêtres refaites : habillage « Console », logo, couleur et nom de piste).
 - Après une modification : tester, compiler, puis installer soi-même avec `installer.ps1` (FL Studio fermé), sans le demander à Pierre.
 - **Claude gère git lui-même (décision de Pierre, 14 novembre 2026)** : après chaque modification terminée (testée, compilée, installée), commiter sur `main` avec un message en français qui dit ce qui change et pourquoi, puis pousser vers `origin` (GitHub, `Pythorogus/rogus`), sans le demander. Cela ne couvre pas les opérations qui réécrivent ou détruisent l'historique (`push --force`, `reset --hard`, suppression de branche) : celles-là se demandent toujours.
 - Dépôt git (branche `main`), avec un distant `origin` sur GitHub. Le dossier `plugin/build/` et les fichiers audio ne sont pas suivis.

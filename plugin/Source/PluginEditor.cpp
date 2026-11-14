@@ -1,15 +1,9 @@
 #include "PluginEditor.h"
+#include "Textes.h"
 
 namespace
 {
-    const juce::Colour couleurFond    { 0xff1e2428 };
-    const juce::Colour couleurCadre   { 0xff161b1e };
-    const juce::Colour couleurGrille  { 0xff323b41 };
-    const juce::Colour couleurTexte   { 0xffa9b4bb };
-    const juce::Colour couleurCourbe  { 0xff4fb3e8 };
-    const juce::Colour couleurZone    { 0xff7f77dd };
-    const juce::Colour couleurReson   { 0xffe0764f };
-    const juce::Colour couleurDemasquage { 0xffe6c14d };
+    using namespace rogus::console;
 
     constexpr float fMin = 20.0f, fMax = 20000.0f;     // étendue de l'oreille humaine
     constexpr float dbMax = 12.0f;                     // échelle verticale : -12 à +12 dB
@@ -25,11 +19,10 @@ namespace
 
 void CourbeCorrection::paint (juce::Graphics& g)
 {
+    // Pas de fond propre : la courbe est posée sur le « puits » sombre de la fenêtre.
     const auto zone = getLocalBounds().toFloat();
-    g.setColour (couleurCadre);
-    g.fillRoundedRectangle (zone, 6.0f);
-
-    const auto trace = zone.reduced (34.0f, 14.0f).withTrimmedBottom (10.0f);
+    const auto trace = zone.withTrimmedLeft (34.0f).withTrimmedRight (6.0f)
+                           .withTrimmedTop (6.0f).withTrimmedBottom (20.0f);
 
     // Axe horizontal logarithmique : chaque octave occupe la même largeur,
     // comme sur un clavier de piano.
@@ -38,30 +31,40 @@ void CourbeCorrection::paint (juce::Graphics& g)
 
     const auto& role = rogus::role (moteur.lireRole());
 
-    // Zone où ce rôle doit rester lisible dans le mix.
-    g.setColour (couleurZone.withAlpha (0.16f));
-    g.fillRect (juce::Rectangle<float>::leftTopRightBottom (xDe (role.importantMin), trace.getY(),
-                                                             xDe (role.importantMax), trace.getBottom()));
+    // Zone où ce rôle doit rester lisible dans le mix : c'est là que les
+    // pistes moins prioritaires lui cèdent la place.
+    const auto zoneRole = juce::Rectangle<float>::leftTopRightBottom (xDe (role.importantMin), trace.getY(),
+                                                                      xDe (role.importantMax), trace.getBottom());
+    g.setColour (violet.withAlpha (0.10f));
+    g.fillRect (zoneRole);
 
-    g.setFont (juce::FontOptions (11.0f));
+    if (zoneRole.getWidth() > 86.0f)
+    {
+        g.setColour (violet);
+        g.setFont (policeChiffres (11.0f));
+        g.drawText (rogus::fr ("ZONE DU RÔLE"), zoneRole.withHeight (16.0f).translated (0.0f, 3.0f),
+                    juce::Justification::centred);
+    }
+
+    g.setFont (policeChiffres (12.0f));
 
     for (float f : { 50.0f, 100.0f, 200.0f, 500.0f, 1000.0f, 2000.0f, 5000.0f, 10000.0f })
     {
-        g.setColour (couleurGrille);
+        g.setColour (grille);
         g.drawVerticalLine (juce::roundToInt (xDe (f)), trace.getY(), trace.getBottom());
-        g.setColour (couleurTexte);
+        g.setColour (texteAxe);
         g.drawText (f >= 1000.0f ? juce::String (juce::roundToInt (f / 1000.0f)) + "k" : juce::String (juce::roundToInt (f)),
-                    juce::Rectangle<float> (xDe (f) - 20.0f, trace.getBottom() + 2.0f, 40.0f, 14.0f),
+                    juce::Rectangle<float> (xDe (f) - 20.0f, trace.getBottom() + 4.0f, 40.0f, 14.0f),
                     juce::Justification::centred);
     }
 
     for (float db : { -12.0f, -6.0f, 0.0f, 6.0f, 12.0f })
     {
-        g.setColour (db == 0.0f ? couleurTexte.withAlpha (0.6f) : couleurGrille);
+        g.setColour (db == 0.0f ? grilleZero : grille);
         g.drawHorizontalLine (juce::roundToInt (yDe (db)), trace.getX(), trace.getRight());
-        g.setColour (couleurTexte);
+        g.setColour (texteAxe);
         g.drawText ((db > 0.0f ? "+" : "") + juce::String (juce::roundToInt (db)),
-                    juce::Rectangle<float> (zone.getX(), yDe (db) - 7.0f, 30.0f, 14.0f),
+                    juce::Rectangle<float> (zone.getX(), yDe (db) - 7.0f, 28.0f, 14.0f),
                     juce::Justification::centredRight);
     }
 
@@ -82,10 +85,23 @@ void CourbeCorrection::paint (juce::Graphics& g)
         else        chemin.lineTo (trace.getX() + (float) i, y);
     }
 
+    const bool active = moteur.lireQuantiteEffective() > 0.0f;
+    const auto couleurCourbe = active ? accent : texteDoux.withAlpha (0.6f);
+
     g.saveState();
     g.reduceClipRegion (trace.toNearestInt());
-    g.setColour (moteur.lireQuantiteEffective() > 0.0f ? couleurCourbe : couleurTexte.withAlpha (0.5f));
-    g.strokePath (chemin, juce::PathStrokeType (2.0f));
+
+    // Surface entre la courbe et le zéro : on voit d'un coup d'œil ce qui est
+    // monté (au-dessus) et ce qui est baissé (en dessous).
+    juce::Path surface (chemin);
+    surface.lineTo (trace.getX() + (float) (nbPoints - 1), yDe (0.0f));
+    surface.lineTo (trace.getX(), yDe (0.0f));
+    surface.closeSubPath();
+    g.setColour (couleurCourbe.withAlpha (0.12f));
+    g.fillPath (surface);
+
+    g.setColour (couleurCourbe);
+    g.strokePath (chemin, juce::PathStrokeType (2.2f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
     g.restoreState();
 
     // Démasquage en cours : une seconde courbe montre le total (correction fixe
@@ -112,13 +128,13 @@ void CourbeCorrection::paint (juce::Graphics& g)
 
         g.saveState();
         g.reduceClipRegion (trace.toNearestInt());
-        g.setColour (couleurDemasquage);
+        g.setColour (violet);
         g.strokePath (total, juce::PathStrokeType (1.6f));
         g.restoreState();
     }
 
     // Repères des résonances atténuées.
-    g.setColour (couleurReson);
+    g.setColour (alerte);
 
     for (int i = 0; i < dosee.nbRes; ++i)
     {
@@ -133,43 +149,23 @@ void CourbeCorrection::paint (juce::Graphics& g)
 RogusEditor::RogusEditor (RogusProcessor& m)
     : AudioProcessorEditor (&m), moteur (m), courbe (m)
 {
-    // Un petit titre au-dessus de chaque menu : le rôle (fonction), la source
-    // (ce qui produit le son) et le son (son caractère).
-    auto preparerMenu = [this] (juce::Label& etiquette, const char* titre,
-                                juce::ComboBox& menu, const juce::StringArray& choix)
-    {
-        etiquette.setText (rogus::fr (titre), juce::dontSendNotification);
-        etiquette.setFont (juce::FontOptions (12.0f));
-        etiquette.setColour (juce::Label::textColourId, couleurTexte);
-        etiquette.setJustificationType (juce::Justification::centredLeft);
-        addAndMakeVisible (etiquette);
+    setLookAndFeel (&habillage);
 
+    // Trois grands menus : le rôle (fonction dans le mix), la source (ce qui
+    // produit le son) et le son (son caractère). Le titre est dessiné dans le menu.
+    auto preparerMenu = [this] (const char* titre, juce::ComboBox& menu, const juce::StringArray& choix)
+    {
         // Les choix doivent exister avant l'attache, qui sélectionne le bon.
+        menu.setTitle (rogus::fr (titre));
         menu.addItemList (choix, 1);
         addAndMakeVisible (menu);
     };
 
-    preparerMenu (etiquetteRole,   "Rôle",   choixRole,   rogus::nomsRoles());
-    preparerMenu (etiquetteSource, "Source", choixSource, rogus::nomsSources());
-    preparerMenu (etiquetteSon,    "Son",    choixSon,    rogus::nomsSons());
+    preparerMenu ("Rôle",   choixRole,   rogus::nomsRoles());
+    preparerMenu ("Source", choixSource, rogus::nomsSources());
+    preparerMenu ("Son",    choixSon,    rogus::nomsSons());
 
     addAndMakeVisible (courbe);
-
-    etat.setJustificationType (juce::Justification::centredLeft);
-    etat.setColour (juce::Label::textColourId, couleurTexte);
-    etat.setFont (juce::FontOptions (13.0f));
-    addAndMakeVisible (etat);
-
-    addAndMakeVisible (boutonActif);
-
-    etiquetteQuantite.setText (rogus::fr ("Quantité"), juce::dontSendNotification);
-    etiquetteQuantite.setJustificationType (juce::Justification::centredRight);
-    addAndMakeVisible (etiquetteQuantite);
-
-    curseurQuantite.setSliderStyle (juce::Slider::LinearHorizontal);
-    curseurQuantite.setTextBoxStyle (juce::Slider::TextBoxRight, false, 56, 22);
-    curseurQuantite.setTextValueSuffix (" %");
-    addAndMakeVisible (curseurQuantite);
 
     boutonEcoute.onClick = [this]
     {
@@ -178,66 +174,76 @@ RogusEditor::RogusEditor (RogusProcessor& m)
     };
     addAndMakeVisible (boutonEcoute);
 
-    attacheRole     = std::make_unique<AttacheChoix>   (moteur.parametres, IdParam::role, choixRole);
-    attacheSource   = std::make_unique<AttacheChoix>   (moteur.parametres, IdParam::source, choixSource);
-    attacheSon      = std::make_unique<AttacheChoix>   (moteur.parametres, IdParam::son, choixSon);
-    attacheActif    = std::make_unique<AttacheBouton>  (moteur.parametres, IdParam::correctionActive, boutonActif);
-    attacheQuantite = std::make_unique<AttacheCurseur> (moteur.parametres, IdParam::quantite, curseurQuantite);
-
-    // --- Démasquage dynamique : la piste cède de la place aux pistes plus prioritaires ---
-    etatDemasquage.setJustificationType (juce::Justification::centredLeft);
-    etatDemasquage.setColour (juce::Label::textColourId, couleurTexte);
-    etatDemasquage.setFont (juce::FontOptions (13.0f));
-    addAndMakeVisible (etatDemasquage);
-
-    boutonDemasquage.setButtonText (rogus::fr ("Démasquage"));
-    addAndMakeVisible (boutonDemasquage);
-
-    auto preparerCurseur = [this] (juce::Label& etiquette, const char* titre, juce::Slider& curseur)
+    auto preparerEtat = [this] (juce::Label& etiquette)
     {
-        etiquette.setText (rogus::fr (titre), juce::dontSendNotification);
-        etiquette.setJustificationType (juce::Justification::centredRight);
+        etiquette.setJustificationType (juce::Justification::topLeft);
+        etiquette.setColour (juce::Label::textColourId, texteDoux);
+        etiquette.setFont (police (13.0f));
+        etiquette.setMinimumHorizontalScale (0.85f);
+        etiquette.setBorderSize ({ 0, 0, 0, 0 });
         addAndMakeVisible (etiquette);
-
-        curseur.setSliderStyle (juce::Slider::LinearHorizontal);
-        curseur.setTextBoxStyle (juce::Slider::TextBoxRight, false, 56, 22);
-        curseur.setTextValueSuffix (" %");
-        addAndMakeVisible (curseur);
     };
 
-    preparerCurseur (etiquetteDemQuantite, "Quantité", curseurDemQuantite);
-    preparerCurseur (etiquetteReactivite, "Réactivité", curseurReactivite);
+    // --- Correction fixe ---
+    addAndMakeVisible (boutonActif);
+    addAndMakeVisible (potardQuantite);
+    preparerEtat (etat);
 
     // --- Compression : resserre l'écart entre passages forts et faibles ---
-    etatCompression.setJustificationType (juce::Justification::centredLeft);
-    etatCompression.setColour (juce::Label::textColourId, couleurTexte);
-    etatCompression.setFont (juce::FontOptions (13.0f));
-    addAndMakeVisible (etatCompression);
     addAndMakeVisible (boutonCompression);
-    preparerCurseur (etiquetteCompQuantite, "Quantité", curseurCompQuantite);
+    addAndMakeVisible (potardCompQuantite);
+    preparerEtat (etatCompression);
 
-    attacheCompression  = std::make_unique<AttacheBouton>  (moteur.parametres, IdParam::compressionActive, boutonCompression);
-    attacheCompQuantite = std::make_unique<AttacheCurseur> (moteur.parametres, IdParam::compressionQuantite, curseurCompQuantite);
+    // --- Démasquage dynamique : la piste cède de la place aux pistes plus prioritaires ---
+    boutonDemasquage.setButtonText (rogus::fr ("Démasquage"));
+    addAndMakeVisible (boutonDemasquage);
+    addAndMakeVisible (potardDemQuantite);
+    addAndMakeVisible (potardReactivite);
+    preparerEtat (etatDemasquage);
 
-    etiquettePriorite.setText (rogus::fr ("Priorité"), juce::dontSendNotification);
-    etiquettePriorite.setJustificationType (juce::Justification::centredRight);
-    addAndMakeVisible (etiquettePriorite);
+    choixPriorite.setTitle (rogus::fr ("Priorité"));
+    choixPriorite.setTooltip (rogus::fr ("Priorité de la piste : Auto prend celle du rôle."));
     choixPriorite.addItemList ({ "Auto", "1", "2", "3", "4", "5" }, 1);
     addAndMakeVisible (choixPriorite);
 
-    attachePriorite    = std::make_unique<AttacheChoix>   (moteur.parametres, IdParam::priorite, choixPriorite);
-    attacheDemasquage  = std::make_unique<AttacheBouton>  (moteur.parametres, IdParam::demasquageActif, boutonDemasquage);
-    attacheDemQuantite = std::make_unique<AttacheCurseur> (moteur.parametres, IdParam::demasquageQuantite, curseurDemQuantite);
-    attacheReactivite  = std::make_unique<AttacheCurseur> (moteur.parametres, IdParam::reactivite, curseurReactivite);
+    attacheRole         = std::make_unique<AttacheChoix>   (moteur.parametres, IdParam::role, choixRole);
+    attacheSource       = std::make_unique<AttacheChoix>   (moteur.parametres, IdParam::source, choixSource);
+    attacheSon          = std::make_unique<AttacheChoix>   (moteur.parametres, IdParam::son, choixSon);
+    attachePriorite     = std::make_unique<AttacheChoix>   (moteur.parametres, IdParam::priorite, choixPriorite);
+    attacheActif        = std::make_unique<AttacheBouton>  (moteur.parametres, IdParam::correctionActive, boutonActif);
+    attacheCompression  = std::make_unique<AttacheBouton>  (moteur.parametres, IdParam::compressionActive, boutonCompression);
+    attacheDemasquage   = std::make_unique<AttacheBouton>  (moteur.parametres, IdParam::demasquageActif, boutonDemasquage);
+    attacheQuantite     = std::make_unique<AttacheCurseur> (moteur.parametres, IdParam::quantite, potardQuantite.curseur);
+    attacheCompQuantite = std::make_unique<AttacheCurseur> (moteur.parametres, IdParam::compressionQuantite, potardCompQuantite.curseur);
+    attacheDemQuantite  = std::make_unique<AttacheCurseur> (moteur.parametres, IdParam::demasquageQuantite, potardDemQuantite.curseur);
+    attacheReactivite   = std::make_unique<AttacheCurseur> (moteur.parametres, IdParam::reactivite, potardReactivite.curseur);
 
-    setSize (640, 650);
+    suivrePiste (true);
+    setSize (700, 768);
     timerCallback();
-    startTimerHz (15);     // rafraîchit la courbe et le texte d'état
+    startTimerHz (15);     // rafraîchit la courbe et les textes d'état
 }
 
 RogusEditor::~RogusEditor()
 {
     stopTimer();
+    setLookAndFeel (nullptr);
+}
+
+// Nom et couleur de la piste, si l'hôte les donne. Sinon : pas d'étiquette,
+// accent ambre.
+void RogusEditor::suivrePiste (bool forcer)
+{
+    const auto infos = moteur.piste.lire();
+
+    if (! forcer && infos == piste)
+        return;
+
+    piste = infos;
+    const auto accent = accentPour (piste);
+    habillage.changerAccent (accent);
+    courbe.accent = accent;
+    repaint();
 }
 
 juce::String RogusEditor::texteEtat() const
@@ -258,7 +264,7 @@ juce::String RogusEditor::texteEtat() const
         return rogus::fr ("Pas encore d'écoute : seul le coupe-bas du rôle (")
              + ecrireFrequence (correction.coupeBasHz) + rogus::fr (") est appliqué.");
 
-    juce::String texte = rogus::fr ("Équilibre corrigé d'après l'écoute.");
+    juce::String phrase = rogus::fr ("Équilibre corrigé d'après l'écoute.");
 
     if (correction.nbRes > 0)
     {
@@ -266,10 +272,10 @@ juce::String RogusEditor::texteEtat() const
         for (int i = 0; i < correction.nbRes; ++i)
             liste.add (ecrireFrequence (correction.resHz[(size_t) i]));
 
-        texte += rogus::fr (" Résonances atténuées : ") + liste.joinIntoString (", ") + ".";
+        phrase += rogus::fr (" Résonances atténuées : ") + liste.joinIntoString (", ") + ".";
     }
 
-    return texte;
+    return phrase;
 }
 
 juce::String RogusEditor::texteCompression() const
@@ -302,10 +308,10 @@ juce::String RogusEditor::texteDemasquage() const
     if (! moteur.lireDemasquageActif())
         return rogus::fr ("Démasquage à l'arrêt (") + pistes + ").";
 
-    juce::String texte = rogus::fr ("Priorité ") + juce::String (moteur.lirePriorite()) + ", " + pistes + ".";
+    juce::String phrase = rogus::fr ("Priorité ") + juce::String (moteur.lirePriorite()) + ", " + pistes + ".";
 
     if (! moteur.lireMesure().refValide)
-        return texte + rogus::fr (" Fais une écoute pour que les autres pistes lui cèdent la place.");
+        return phrase + rogus::fr (" Fais une écoute pour que les autres pistes lui cèdent la place.");
 
     // La bande où cette piste cède le plus en ce moment, et à qui.
     const auto reductions = moteur.lireReductions();
@@ -318,105 +324,188 @@ juce::String RogusEditor::texteDemasquage() const
     const int role = moteur.lireRoleDominant();
 
     if (reductions[bande] < -0.2f && role >= 0)
-        texte += rogus::fr (" Cède ") + juce::String (-reductions[bande], 1).replaceCharacter ('.', ',') + " dB vers "
+        phrase += rogus::fr (" Cède ") + juce::String (-reductions[bande], 1).replaceCharacter ('.', ',') + " dB vers "
                + ecrireFrequence ((float) rogus::frequencesBandes[bande]) + rogus::fr (" à : ")
                + rogus::fr (rogus::role (role).nom) + ".";
     else
-        texte += rogus::fr (" Ne cède rien en ce moment.");
+        phrase += rogus::fr (" Ne cède rien en ce moment.");
 
-    return texte;
+    return phrase;
 }
 
 void RogusEditor::timerCallback()
 {
+    suivrePiste (false);
+
+    const bool enEcoute = moteur.ecouteEnCours();
+    const bool mesureValide = moteur.lireMesure().valide;
+    const bool correctionActive = moteur.lireQuantiteEffective() > 0.0f;
+    const bool compressionActive = moteur.lireQuantiteCompression() > 0.0f;
+    const bool compressionPossible = moteur.lireCorrection().compression.valide;
+    const bool demasquageActif = moteur.lireDemasquageActif();
+
     etat.setText (texteEtat(), juce::dontSendNotification);
-    etatDemasquage.setText (texteDemasquage(), juce::dontSendNotification);
     etatCompression.setText (texteCompression(), juce::dontSendNotification);
-    boutonEcoute.setButtonText (moteur.ecouteEnCours() ? rogus::fr ("Arrêter l'écoute")
-                                                       : rogus::fr ("Écouter la piste"));
+    etatDemasquage.setText (texteDemasquage(), juce::dontSendNotification);
+
+    // Un texte passe en couleur d'avertissement quand il demande quelque chose
+    // à l'utilisateur (faire une écoute).
+    etat.setColour (juce::Label::textColourId, moteur.ecouteTropCourte() && ! enEcoute ? avertissement : texteDoux);
+    etatCompression.setColour (juce::Label::textColourId,
+                               compressionActive && ! compressionPossible ? avertissement : texteDoux);
+    etatDemasquage.setColour (juce::Label::textColourId,
+                              demasquageActif && ! moteur.lireMesure().refValide ? avertissement : texteDoux);
+
+    // Un potard qui n'agit pas en ce moment est estompé.
+    potardQuantite.setAlpha (correctionActive ? 1.0f : 0.45f);
+    potardCompQuantite.setAlpha (compressionActive && compressionPossible ? 1.0f : 0.45f);
+    potardDemQuantite.setAlpha (demasquageActif ? 1.0f : 0.45f);
+    potardReactivite.setAlpha (demasquageActif ? 1.0f : 0.45f);
+
+    boutonEcoute.setButtonText (enEcoute ? rogus::fr ("Arrêter l'écoute") : rogus::fr ("Écouter la piste"));
+
+    if ((bool) boutonEcoute.getProperties().getWithDefault ("enEcoute", false) != enEcoute)
+    {
+        boutonEcoute.getProperties().set ("enEcoute", enEcoute);
+        boutonEcoute.repaint();
+    }
+
+    // Résumé en une ligne au-dessus de la courbe, avec une pastille de couleur.
+    juce::String resume;
+    juce::Colour couleur = eteint;
+
+    if (enEcoute)
+    {
+        resume = rogus::fr ("Écoute : ") + juce::String (juce::roundToInt (moteur.progressionEcoute() * 100.0f)) + " %";
+        couleur = habillage.accent();
+    }
+    else if (moteur.ecouteTropCourte())
+    {
+        resume = rogus::fr ("Écoute trop courte");
+        couleur = avertissement;
+    }
+    else if (! correctionActive)
+    {
+        resume = rogus::fr ("Correction à l'arrêt");
+    }
+    else if (mesureValide)
+    {
+        resume = rogus::fr ("Corrigé d'après l'écoute");
+        couleur = vert;
+    }
+    else
+    {
+        resume = rogus::fr ("Pas encore d'écoute");
+    }
+
+    if (resume != etatCourt || couleur != pastille)
+    {
+        etatCourt = resume;
+        pastille = couleur;
+        repaint (ligneCourbe);
+    }
+
     courbe.repaint();
 }
 
 void RogusEditor::paint (juce::Graphics& g)
 {
-    g.fillAll (couleurFond);
+    g.fillAll (fond);
 
-    g.setColour (juce::Colours::white);
-    g.setFont (juce::FontOptions (20.0f));
-    g.drawText ("Rogus", getLocalBounds().reduced (16, 0).removeFromTop (48), juce::Justification::centredLeft);
-
-    // Numéro de version, discret, dans la marge du bas à droite : il permet de
+    // Le numéro de version reste visible en haut à droite : il permet de
     // vérifier que l'hôte a bien chargé la dernière version installée.
-    g.setColour (couleurTexte.withAlpha (0.45f));
-    g.setFont (juce::FontOptions (10.0f));
-    g.drawText ("v" ROGUS_VERSION, getLocalBounds().removeFromBottom (16).reduced (8, 0),
-                juce::Justification::centredRight);
+    dessinerEntete (g, getWidth(), "ROGUS", piste.nom, "v" ROGUS_VERSION, habillage.accent());
+
+    // Le cadre de la courbe, avec sa ligne de titre.
+    dessinerPuits (g, cadreCourbe, 10.0f);
+
+    auto ligne = ligneCourbe;
+    dessinerTitre (g, rogus::fr ("Équilibre"), ligne.removeFromLeft (82));
+    g.setColour (pastille);
+    g.fillEllipse ((float) ligne.getX(), (float) ligne.getCentreY() - 3.5f, 7.0f, 7.0f);
+    g.setColour (texte);
+    g.setFont (police (13.0f));
+    g.drawText (etatCourt, ligne.withTrimmedLeft (14), juce::Justification::centredLeft, true);
+
+    // Les trois cartes du bas, et la petite mention à droite de leur titre.
+    for (const auto& carteZone : cartes)
+        dessinerCarte (g, carteZone, 10.0f);
+
+    g.setColour (texteDoux);
+    g.setFont (police (12.0f));
+    g.drawText ("EQ",  cartes[0].reduced (14).removeFromTop (24), juce::Justification::centredRight);
+    g.drawText ("Dyn", cartes[1].reduced (14).removeFromTop (24), juce::Justification::centredRight);
 }
 
 void RogusEditor::resized()
 {
-    auto zone = getLocalBounds().reduced (16);
+    auto zone = getLocalBounds();
+    zone.removeFromTop (hauteurEntete);
+    zone = zone.reduced (16, 0);
+    zone.removeFromTop (14);
+    zone.removeFromBottom (16);
 
-    zone.removeFromTop (30);                        // place du titre « Rogus »
+    // Trois grands menus de même largeur.
+    auto menus = zone.removeFromTop (48);
+    const int largeurMenu = (menus.getWidth() - 2 * 10) / 3;
+    choixRole.setBounds (menus.removeFromLeft (largeurMenu));
+    menus.removeFromLeft (10);
+    choixSource.setBounds (menus.removeFromLeft (largeurMenu));
+    menus.removeFromLeft (10);
+    choixSon.setBounds (menus);
+    zone.removeFromTop (12);
 
-    // Trois colonnes égales : un titre, puis le menu en dessous.
-    auto menus = zone.removeFromTop (46);
-    const int largeur = (menus.getWidth() - 2 * 12) / 3;
+    // En bas : les trois cartes, dans l'ordre du trajet du son.
+    auto bas = zone.removeFromBottom (300);
+    const int largeurCarte = (bas.getWidth() - 2 * 10) / 3;
 
-    auto placer = [&] (juce::Label& etiquette, juce::ComboBox& menu)
+    for (size_t i = 0; i < cartes.size(); ++i)
     {
-        auto colonne = menus.removeFromLeft (largeur);
-        menus.removeFromLeft (12);
-        etiquette.setBounds (colonne.removeFromTop (16));
-        menu.setBounds (colonne.reduced (0, 1));
+        cartes[i] = i + 1 < cartes.size() ? bas.removeFromLeft (largeurCarte) : bas;
+        bas.removeFromLeft (10);
+    }
+
+    zone.removeFromBottom (12);
+
+    // Au milieu : la courbe, sous une ligne qui porte le résumé et le bouton d'écoute.
+    cadreCourbe = zone;
+    auto dedans = cadreCourbe.reduced (12, 10);
+    ligneCourbe = dedans.removeFromTop (30);
+    boutonEcoute.setBounds (ligneCourbe.removeFromRight (168));
+    ligneCourbe.removeFromRight (10);
+    dedans.removeFromTop (6);
+    courbe.setBounds (dedans);
+
+    // Dans une carte : l'interrupteur et son titre, le ou les potards, puis le texte d'état.
+    auto placerCarte = [] (juce::Rectangle<int> carteZone, juce::Component& interrupteur, int placeADroite,
+                           std::initializer_list<rogus::Potard*> potards, juce::Label& texteEtatCarte)
+    {
+        auto interieur = carteZone.reduced (14);
+        interrupteur.setBounds (interieur.removeFromTop (24).withTrimmedRight (placeADroite));
+        texteEtatCarte.setBounds (interieur.removeFromBottom (68));
+
+        int largeurTotale = 0, hauteur = 0;
+
+        for (auto* p : potards)
+        {
+            largeurTotale += p->largeurVoulue();
+            hauteur = juce::jmax (hauteur, p->hauteurVoulue());
+        }
+
+        int x = interieur.getCentreX() - largeurTotale / 2;
+        const int y = interieur.getCentreY() - hauteur / 2;
+
+        for (auto* p : potards)
+        {
+            p->setBounds (x, y, p->largeurVoulue(), p->hauteurVoulue());
+            x += p->largeurVoulue();
+        }
     };
 
-    placer (etiquetteRole, choixRole);
-    placer (etiquetteSource, choixSource);
-    placer (etiquetteSon, choixSon);
-    zone.removeFromTop (10);
+    placerCarte (cartes[0], boutonActif, 30, { &potardQuantite }, etat);
+    placerCarte (cartes[1], boutonCompression, 30, { &potardCompQuantite }, etatCompression);
+    placerCarte (cartes[2], boutonDemasquage, 60, { &potardDemQuantite, &potardReactivite }, etatDemasquage);
 
-    // Tout en bas : les deux lignes du démasquage. Mêmes colonnes que la ligne
-    // de la correction fixe, pour que les curseurs s'alignent.
-    auto ligneReactivite = zone.removeFromBottom (34);
-    ligneReactivite.removeFromLeft (140);
-    ligneReactivite.removeFromRight (150 + 12);
-    etiquetteReactivite.setBounds (ligneReactivite.removeFromLeft (70));
-    curseurReactivite.setBounds (ligneReactivite);
-
-    auto ligneDemasquage = zone.removeFromBottom (34);
-    boutonDemasquage.setBounds (ligneDemasquage.removeFromLeft (140));
-    choixPriorite.setBounds (ligneDemasquage.removeFromRight (84).reduced (0, 4));
-    etiquettePriorite.setBounds (ligneDemasquage.removeFromRight (66));
-    ligneDemasquage.removeFromRight (12);
-    etiquetteDemQuantite.setBounds (ligneDemasquage.removeFromLeft (70));
-    curseurDemQuantite.setBounds (ligneDemasquage);
-
-    zone.removeFromBottom (4);
-    etatDemasquage.setBounds (zone.removeFromBottom (24));
-    zone.removeFromBottom (8);
-
-    // Au milieu : la compression (elle vient après la correction fixe dans le trajet du son).
-    auto ligneCompression = zone.removeFromBottom (34);
-    boutonCompression.setBounds (ligneCompression.removeFromLeft (140));
-    ligneCompression.removeFromRight (150 + 12);
-    etiquetteCompQuantite.setBounds (ligneCompression.removeFromLeft (70));
-    curseurCompQuantite.setBounds (ligneCompression);
-
-    zone.removeFromBottom (4);
-    etatCompression.setBounds (zone.removeFromBottom (24));
-    zone.removeFromBottom (8);
-
-    // Au-dessus : la ligne de la correction fixe et son texte d'état.
-    auto bas = zone.removeFromBottom (34);
-    boutonActif.setBounds (bas.removeFromLeft (140));
-    boutonEcoute.setBounds (bas.removeFromRight (150).reduced (0, 2));
-    bas.removeFromRight (12);
-    etiquetteQuantite.setBounds (bas.removeFromLeft (70));
-    curseurQuantite.setBounds (bas);
-
-    zone.removeFromBottom (6);
-    etat.setBounds (zone.removeFromBottom (24));
-    zone.removeFromBottom (6);
-    courbe.setBounds (zone);
+    // Le menu de priorité tient à droite du titre de la carte Démasquage.
+    choixPriorite.setBounds (cartes[2].reduced (14).removeFromTop (24).removeFromRight (58));
 }

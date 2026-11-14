@@ -3,10 +3,10 @@
 
 cmake_minimum_required(VERSION 3.22)
 
-project(RogusPlugin VERSION 0.3.0 LANGUAGES C CXX)
+project(RogusPlugin VERSION 0.4.0 LANGUAGES C CXX)
 
-# Numéro de version commun aux deux plugins, affiché en bas à droite de leur
-# fenêtre (« v0.2 »). Deux chiffres suffisent : on augmente le second à chaque
+# Numéro de version commun aux deux plugins, affiché en haut à droite de leur
+# fenêtre (« v0.4 »). Deux chiffres suffisent : on augmente le second à chaque
 # modification installée, en changeant la ligne project(...) ci-dessus. Il sert
 # à vérifier d'un coup d'œil que FL Studio a bien chargé la dernière version.
 set(ROGUS_VERSION "${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}")
@@ -25,6 +25,20 @@ FetchContent_Declare(
     GIT_SHALLOW    TRUE
 )
 FetchContent_MakeAvailable(JUCE)
+
+# Polices des fenêtres (Inter et JetBrains Mono, licence libre OFL, voir les
+# fichiers de licence dans Polices/). Elles sont embarquées dans chaque plugin :
+# la fenêtre a le même aspect sur tous les postes, sans rien installer.
+juce_add_binary_data(RogusPolices
+    HEADER_NAME "Polices.h"
+    NAMESPACE   Polices
+    SOURCES
+        Polices/Inter-Regular.ttf
+        Polices/Inter-SemiBold.ttf
+        Polices/Inter-Bold.ttf
+        Polices/JetBrainsMono-Regular.ttf
+        Polices/JetBrainsMono-Bold.ttf
+)
 
 juce_add_plugin(Rogus
     PRODUCT_NAME              "Rogus"
@@ -49,6 +63,7 @@ set(SOURCES_ROGUS
     Source/Orchestre.cpp
     Source/PluginProcessor.cpp
     Source/PluginEditor.cpp
+    Source/Habillage.cpp
 )
 
 target_sources(Rogus PRIVATE ${SOURCES_ROGUS})
@@ -61,6 +76,7 @@ target_compile_definitions(RogusTests PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0
 target_compile_options(RogusTests PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
 target_link_libraries(RogusTests
     PRIVATE
+        RogusPolices
         juce::juce_audio_utils
         juce::juce_dsp
         juce::juce_recommended_config_flags
@@ -81,6 +97,7 @@ target_compile_options(Rogus PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
 
 target_link_libraries(Rogus
     PRIVATE
+        RogusPolices
         juce::juce_audio_utils
         juce::juce_dsp
     PUBLIC
@@ -111,6 +128,7 @@ set(SOURCES_MASTER
     SourceMaster/MesureLoudness.cpp
     SourceMaster/MasterProcessor.cpp
     SourceMaster/MasterEditor.cpp
+    Source/Habillage.cpp
 )
 
 target_sources(RogusMaster PRIVATE ${SOURCES_MASTER})
@@ -127,6 +145,7 @@ target_compile_options(RogusMaster PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
 
 target_link_libraries(RogusMaster
     PRIVATE
+        RogusPolices
         juce::juce_audio_utils
         juce::juce_dsp
     PUBLIC
@@ -143,6 +162,7 @@ target_compile_definitions(RogusMasterTests PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_
 target_compile_options(RogusMasterTests PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
 target_link_libraries(RogusMasterTests
     PRIVATE
+        RogusPolices
         juce::juce_audio_utils
         juce::juce_dsp
         juce::juce_recommended_config_flags
