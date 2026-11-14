@@ -740,4 +740,23 @@ float reductionBande (float poidsZoneBande, float activiteBande, int quiDemande,
          * std::clamp (activiteBande, 0.0f, 1.0f) * std::clamp (poidsZoneBande, 0.0f, 1.0f);
 }
 
+float activiteDansZone (const Equilibre& poids, const Equilibre& activites) noexcept
+{
+    float plusForte = 0.0f;
+
+    for (size_t b = 0; b < (size_t) nbBandes; ++b)
+        plusForte = std::max (plusForte, std::clamp (poids[b], 0.0f, 1.0f) * std::clamp (activites[b], 0.0f, 1.0f));
+
+    return plusForte;
+}
+
+float creuxVolume (float activiteZone, int quiDemande, int quiCede, float quantite) noexcept
+{
+    // À priorité égale ou inférieure, on ne demande rien : personne ne cède.
+    if (quiDemande <= quiCede)
+        return 0.0f;
+
+    return -profondeurCreuxMaxDb * std::clamp (quantite, 0.0f, 1.0f) * std::clamp (activiteZone, 0.0f, 1.0f);
+}
+
 } // namespace rogus

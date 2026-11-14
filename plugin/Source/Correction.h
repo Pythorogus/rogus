@@ -267,4 +267,23 @@ float facteurPriorite (int prioriteQuiDemande, int prioriteQuiCede) noexcept;
 float reductionBande (float poidsZone, float activite, int prioriteQuiDemande,
                       int prioriteQuiCede, float quantite) noexcept;
 
+// --- Creux de volume (v0.5) ----------------------------------------------------
+// Le démasquage baisse quelques fréquences. Le creux de volume, lui, baisse la
+// piste ENTIÈRE pendant qu'une piste plus prioritaire joue dans sa zone, puis
+// la laisse remonter : c'est le « sidechain » classique (la basse qui se pousse
+// à chaque coup de kick). Il se coche piste par piste.
+
+// Baisse maximale du volume, à quantité 100 %, quand l'autre piste joue franchement.
+constexpr float profondeurCreuxMaxDb = 6.0f;
+
+// L'autre piste joue-t-elle dans SA zone ? On retient la bande la plus active
+// de la zone (0 à 1). Un kick ne compte donc que par sa bande de 100 Hz : le
+// claquement qu'il laisse dans l'aigu ne déclenche rien.
+float activiteDansZone (const Equilibre& poidsZone, const Equilibre& activites) noexcept;
+
+// Baisse de volume (dB, <= 0) demandée par une piste strictement plus prioritaire.
+// Contrairement au démasquage, l'écart de priorité ne dose pas la baisse : un
+// seul cran d'écart (kick 5, basse 4) doit suffire à faire un vrai creux.
+float creuxVolume (float activiteZone, int prioriteQuiDemande, int prioriteQuiCede, float quantite) noexcept;
+
 } // namespace rogus

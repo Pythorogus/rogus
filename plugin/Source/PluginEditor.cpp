@@ -206,7 +206,13 @@ RogusEditor::RogusEditor (RogusProcessor& m)
     choixPriorite.addItemList ({ "Auto", "1", "2", "3", "4", "5" }, 1);
     addAndMakeVisible (choixPriorite);
 
-    attacheRole         = std::make_unique<AttacheChoix>   (moteur.parametres, IdParam::role, choixRole);
+    // Creux de volume : au lieu de quelques fréquences, c'est la piste entière
+    // qui baisse quand une piste plus prioritaire joue (la basse sous le kick).
+    boutonCreux.setTooltip (rogus::fr ("La piste entière baisse pendant qu'une piste plus prioritaire joue, puis remonte."));
+    addAndMakeVisible (boutonCreux);
+
+    attacheCreux = std::make_unique<AttacheBouton> (moteur.parametres, IdParam::creuxVolume, boutonCreux);
+    attacheRole        = std::make_unique<AttacheChoix>   (moteur.parametres, IdParam::role, choixRole);
     attacheSource       = std::make_unique<AttacheChoix>   (moteur.parametres, IdParam::source, choixSource);
     attacheSon          = std::make_unique<AttacheChoix>   (moteur.parametres, IdParam::son, choixSon);
     attachePriorite     = std::make_unique<AttacheChoix>   (moteur.parametres, IdParam::priorite, choixPriorite);
@@ -322,12 +328,23 @@ juce::String RogusEditor::texteDemasquage() const
             bande = b;
 
     const int role = moteur.lireRoleDominant();
+    const bool cedeBande = reductions[bande] < -0.2f && role >= 0;
 
-    if (reductions[bande] < -0.2f && role >= 0)
+    if (cedeBande)
         phrase += rogus::fr (" Cède ") + juce::String (-reductions[bande], 1).replaceCharacter ('.', ',') + " dB vers "
                + ecrireFrequence ((float) rogus::frequencesBandes[bande]) + rogus::fr (" à : ")
                + rogus::fr (rogus::role (role).nom) + ".";
-    else
+
+    // Le creux de volume en cours : de combien la piste entière baisse, et pour qui.
+    const float creux = moteur.lireCreux();
+    const int roleCreux = moteur.lireRoleCreux();
+    const bool creuse = moteur.lireCreuxActif() && creux < -0.2f;
+
+    if (creuse)
+        phrase += rogus::fr (" Volume baissé de ") + juce::String (-creux, 1).replaceCharacter ('.', ',') + " dB"
+               + (roleCreux >= 0 ? rogus::fr (" pour : ") + rogus::fr (rogus::role (roleCreux).nom) : juce::String()) + ".";
+
+    if (! cedeBande && ! creuse)
         phrase += rogus::fr (" Ne cède rien en ce moment.");
 
     return phrase;
@@ -361,6 +378,7 @@ void RogusEditor::timerCallback()
     potardCompQuantite.setAlpha (compressionActive && compressionPossible ? 1.0f : 0.45f);
     potardDemQuantite.setAlpha (demasquageActif ? 1.0f : 0.45f);
     potardReactivite.setAlpha (demasquageActif ? 1.0f : 0.45f);
+    boutonCreux.setAlpha (demasquageActif ? 1.0f : 0.45f);
 
     boutonEcoute.setButtonText (enEcoute ? rogus::fr ("Arrêter l'écoute") : rogus::fr ("Écouter la piste"));
 
@@ -478,11 +496,19 @@ void RogusEditor::resized()
 
     // Dans une carte : l'interrupteur et son titre, le ou les potards, puis le texte d'état.
     auto placerCarte = [] (juce::Rectangle<int> carteZone, juce::Component& interrupteur, int placeADroite,
-                           std::initializer_list<rogus::Potard*> potards, juce::Label& texteEtatCarte)
+                           std::initializer_list<rogus::Potard*> potards, juce::Label& texteEtatCarte,
+                           juce::Component* optionDessous = nullptr)
     {
         auto interieur = carteZone.reduced (14);
         interrupteur.setBounds (interieur.removeFromTop (24).withTrimmedRight (placeADroite));
         texteEtatCarte.setBounds (interieur.removeFromBottom (68));
+
+        // Une option de plus (un second interrupteur), entre les potards et le texte.
+        if (optionDessous != nullptr)
+        {
+            interieur.removeFromBottom (8);
+            optionDessous->setBounds (interieur.removeFromBottom (24));
+        }
 
         int largeurTotale = 0, hauteur = 0;
 
@@ -504,7 +530,7 @@ void RogusEditor::resized()
 
     placerCarte (cartes[0], boutonActif, 30, { &potardQuantite }, etat);
     placerCarte (cartes[1], boutonCompression, 30, { &potardCompQuantite }, etatCompression);
-    placerCarte (cartes[2], boutonDemasquage, 60, { &potardDemQuantite, &potardReactivite }, etatDemasquage);
+    placerCarte (cartes[2], boutonDemasquage, 60, { &potardDemQuantite, &potardReactivite }, etatDemasquage, &boutonCreux);
 
     // Le menu de priorité tient à droite du titre de la carte Démasquage.
     choixPriorite.setBounds (cartes[2].reduced (14).removeFromTop (24).removeFromRight (58));

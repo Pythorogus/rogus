@@ -103,6 +103,7 @@ RogusProcessor::RogusProcessor()
     paramReactivite  = parametres.getRawParameterValue (IdParam::reactivite);
     paramCompression  = parametres.getRawParameterValue (IdParam::compressionActive);
     paramCompQuantite = parametres.getRawParameterValue (IdParam::compressionQuantite);
+    paramCreux        = parametres.getRawParameterValue (IdParam::creuxVolume);
 
     // La zone « à garder lisible » de chaque rôle, traduite une fois en poids par bande.
     for (int i = 0; i < rogus::nbRoles; ++i)
@@ -187,6 +188,13 @@ juce::AudioProcessorValueTreeState::ParameterLayout RogusProcessor::creerParamet
         juce::NormalisableRange<float> (0.0f, 100.0f, 1.0f), 50.0f,
         juce::AudioParameterFloatAttributes().withLabel ("%")));
 
+    // --- v0.5 : creux de volume. La piste entière baisse pendant qu'une piste
+    //     plus prioritaire joue dans sa zone (le « sidechain » classique : la
+    //     basse qui se pousse à chaque coup de kick). À l'ARRÊT par défaut : un
+    //     ancien projet sonne comme avant, et il ne sert que sur quelques pistes. ---
+    disposition.add (std::make_unique<juce::AudioParameterBool> (
+        juce::ParameterID { IdParam::creuxVolume, 1 }, "Creux de volume", false));
+
     return disposition;
 }
 
@@ -234,6 +242,12 @@ int RogusProcessor::lirePriorite() const noexcept
 bool RogusProcessor::lireDemasquageActif() const noexcept
 {
     return paramDemasquage->load() > 0.5f;
+}
+
+bool RogusProcessor::lireCreuxActif() const noexcept
+{
+    // Le creux de volume fait partie du démasquage : couper celui-ci coupe aussi le creux.
+    return lireDemasquageActif() && paramCreux->load() > 0.5f;
 }
 
 rogus::Reductions RogusProcessor::lireReductions() const noexcept
@@ -401,6 +415,8 @@ void RogusProcessor::prepareToPlay (double frequenceEchantillonnage, int)
     filtresDyn = rogus::construireFiltresDynamiques (reductionLissee, frequenceEch);
     memoireDyn = {};
     dynNeutre = true;
+    creuxTick = 0.0f;
+    creuxLisse = 0.0;
 }
 
 bool RogusProcessor::isBusesLayoutSupported (const BusesLayout& disposition) const
@@ -691,6 +707,37 @@ void RogusProcessor::processBlock (juce::AudioBuffer<float>& tampon, juce::MidiB
 
     for (size_t b = 0; b < (size_t) rogus::nbBandes; ++b)
         reductionsVues[b].store (dynNeutre ? 0.0f : reductionLissee[b]);
+
+    // --- Creux de volume ---
+    // Un simple gain, le même sur tous les canaux, en bout de chaîne : comme
+    // pour le démasquage, la place cédée ne doit pas être « rattrapée ».
+    // `creuxTick` ne bouge qu'au début d'un bloc ; le gain appliqué le rejoint
+    // en 5 ms environ, échantillon par échantillon, pour ne pas faire de marche.
+    if (creuxTick != 0.0f || creuxLisse != 0.0)      // sinon rien à céder : le son passe intact
+    {
+        const double coefCreux = std::exp (-1.0 / (frequenceEch * 0.005));
+        float* gauche = tampon.getWritePointer (0);
+        float* droite = nbCanaux > 1 ? tampon.getWritePointer (1) : nullptr;
+
+        for (int n = 0; n < nbEch; ++n)
+        {
+            creuxLisse = (double) creuxTick + (creuxLisse - (double) creuxTick) * coefCreux;
+
+            // Revenu à un millième de dB de zéro : on s'y pose. Ce test se fait
+            // à chaque échantillon (et non une fois par bloc) pour que le
+            // résultat ne dépende pas de la taille des blocs de l'hôte.
+            if (creuxTick == 0.0f && creuxLisse > -0.001)
+                creuxLisse = 0.0;
+
+            const float gain = (float) std::pow (10.0, creuxLisse / 20.0);
+            gauche[n] *= gain;
+
+            if (droite != nullptr)
+                droite[n] *= gain;
+        }
+    }
+
+    creuxVu.store ((float) creuxLisse);
 }
 
 // --- Orchestration (fil audio) -----------------------------------------------
@@ -810,11 +857,10 @@ void RogusProcessor::finirTick (std::int64_t tick) noexcept
     annonce->publier (tick, activites, juce::Time::getMillisecondCounter());
 }
 
-void RogusProcessor::lireAutresPistes (std::int64_t tick, bool tickPrecis, float quantite, int maPriorite,
-                                       rogus::Reductions& visee, int& roleLePlusFort) const noexcept
+RogusProcessor::Demandes RogusProcessor::lireAutresPistes (std::int64_t tick, bool tickPrecis, float quantite,
+                                                           int maPriorite, bool avecCreux) const noexcept
 {
-    visee = {};
-    roleLePlusFort = -1;
+    Demandes d;
     float plusForte = 0.0f;
     const auto maintenant = juce::Time::getMillisecondCounter();
     auto& orchestre = rogus::Orchestre::instance();
@@ -848,15 +894,31 @@ void RogusProcessor::lireAutresPistes (std::int64_t tick, bool tickPrecis, float
 
             // Plusieurs pistes peuvent demander la même bande : on ne cumule pas,
             // on garde la demande la plus forte.
-            visee[b] = juce::jmin (visee[b], r);
+            d.bandes[b] = juce::jmin (d.bandes[b], r);
 
             if (r < plusForte)
             {
                 plusForte = r;
-                roleLePlusFort = autre.role.load();
+                d.roleBandes = autre.role.load();
+            }
+        }
+
+        // Creux de volume : même règle (la demande la plus forte, pas la somme),
+        // mais c'est la piste entière qui baisse, d'après ce que l'autre joue
+        // dans sa propre zone.
+        if (avecCreux)
+        {
+            const float c = rogus::creuxVolume (rogus::activiteDansZone (zone, activites), saPriorite, maPriorite, quantite);
+
+            if (c < d.creux)
+            {
+                d.creux = c;
+                d.roleCreux = autre.role.load();
             }
         }
     }
+
+    return d;
 }
 
 void RogusProcessor::calculerDemasquage (bool actif, const PositionBloc& pos, int nbEch) noexcept
@@ -867,30 +929,44 @@ void RogusProcessor::calculerDemasquage (bool actif, const PositionBloc& pos, in
     const double tempsAttaque  = 0.200 + (0.015 - 0.200) * r;
     const double tempsRelache  = 0.800 + (0.080 - 0.800) * r;
 
-    auto avancer = [&] (const rogus::Reductions& visee, double duree)
+    // Le creux de volume doit tomber sur le coup de l'autre piste : il s'installe
+    // tout de suite (10 ms, soit presque d'un tick à l'autre). Son retour suit
+    // la réactivité : de 250 ms (le volume revient en douceur) à 60 ms (il
+    // « pompe » franchement, au rythme des coups).
+    const double tempsAttaqueCreux = 0.010;
+    const double tempsRelacheCreux = 0.250 + (0.060 - 0.250) * r;
+
+    auto avancer = [&] (const Demandes& d, double duree)
     {
         for (size_t b = 0; b < (size_t) rogus::nbBandes; ++b)
         {
             // Baisser davantage = attaque (rapide) ; revenir = relâchement (plus lent).
-            const double temps = visee[b] < reductionLissee[b] ? tempsAttaque : tempsRelache;
-            reductionLissee[b] += (visee[b] - reductionLissee[b]) * (float) (1.0 - std::exp (-duree / temps));
+            const double temps = d.bandes[b] < reductionLissee[b] ? tempsAttaque : tempsRelache;
+            reductionLissee[b] += (d.bandes[b] - reductionLissee[b]) * (float) (1.0 - std::exp (-duree / temps));
         }
-    };
 
-    rogus::Reductions visee {};
-    int role = -1;
+        const double tempsCreux = d.creux < creuxTick ? tempsAttaqueCreux : tempsRelacheCreux;
+        creuxTick += (d.creux - creuxTick) * (float) (1.0 - std::exp (-duree / tempsCreux));
+
+        // Revenu à moins d'un centième de dB : on s'arrête là, sinon la valeur
+        // s'approcherait de zéro sans jamais l'atteindre.
+        if (d.creux == 0.0f && creuxTick > -0.01f)
+            creuxTick = 0.0f;
+    };
 
     if (! actif)
     {
         // Couche à l'arrêt : la réduction revient doucement à zéro.
-        avancer (visee, (double) nbEch / frequenceEch);
+        avancer ({}, (double) nbEch / frequenceEch);
         dernierTickLu = -1;
         roleDominant.store (-1);
+        roleCreux.store (-1);
         return;
     }
 
     const float quantite = juce::jlimit (0.0f, 1.0f, paramDemQuantite->load() * 0.01f);
     const int maPriorite = lirePriorite();
+    const bool avecCreux = paramCreux->load() > 0.5f;
 
     if (pos.hote)
     {
@@ -904,24 +980,27 @@ void RogusProcessor::calculerDemasquage (bool actif, const PositionBloc& pos, in
         {
             dernierTickLu = tickLisible - 1;
             reductionLissee = {};
+            creuxTick = 0.0f;
         }
 
         // On avance tick par tick (et non bloc par bloc) : la réduction ne
         // dépend ainsi pas de la taille des blocs choisie par l'hôte.
         for (std::int64_t t = dernierTickLu + 1; t <= tickLisible; ++t)
         {
-            lireAutresPistes (t, true, quantite, maPriorite, visee, role);
-            avancer (visee, (double) rogus::tailleTick / frequenceEch);
+            const auto demandes = lireAutresPistes (t, true, quantite, maPriorite, avecCreux);
+            avancer (demandes, (double) rogus::tailleTick / frequenceEch);
             dernierTickLu = t;
-            roleDominant.store (role);
+            roleDominant.store (demandes.roleBandes);
+            roleCreux.store (demandes.roleCreux);
         }
     }
     else
     {
-        lireAutresPistes (-1, false, quantite, maPriorite, visee, role);
-        avancer (visee, (double) nbEch / frequenceEch);
+        const auto demandes = lireAutresPistes (-1, false, quantite, maPriorite, avecCreux);
+        avancer (demandes, (double) nbEch / frequenceEch);
         dernierTickLu = -1;
-        roleDominant.store (role);
+        roleDominant.store (demandes.roleBandes);
+        roleCreux.store (demandes.roleCreux);
     }
 }
 

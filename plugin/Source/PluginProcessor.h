@@ -23,6 +23,8 @@ namespace IdParam
     // Étape 4 : compression par rôle.
     inline const juce::String compressionActive   { "compressionActive" };
     inline const juce::String compressionQuantite { "compressionQuantite" };
+    // v0.5 : creux de volume (la piste entière baisse quand une piste plus prioritaire joue).
+    inline const juce::String creuxVolume         { "creuxVolume" };
 }
 
 // Le « moteur » du plugin. Étape 2 : EQ fixe par rôle.
@@ -96,6 +98,11 @@ public:
     int lireRoleDominant() const noexcept  { return roleDominant.load(); }   // rôle de la piste à qui on cède le plus, -1 si aucune
     bool lireSynchroHote() const noexcept  { return synchroHoteVue.load(); }
 
+    // --- Creux de volume : la piste entière baisse pour une piste plus prioritaire ---
+    bool lireCreuxActif() const noexcept;                                    // coché, et démasquage en marche
+    float lireCreux() const noexcept      { return creuxVu.load(); }         // dB, <= 0, en ce moment
+    int lireRoleCreux() const noexcept    { return roleCreux.load(); }       // rôle de la piste qui le déclenche, -1 si aucune
+
     // Termine une analyse en attente et suit les changements de rôle.
     // Appelé par le minuteur ; public pour pouvoir être déclenché par les tests.
     void mettreAJour();
@@ -127,8 +134,17 @@ private:
     PositionBloc positionDuBloc (int nbEch) noexcept;
     void analyserBandes (const juce::AudioBuffer<float>&, int nbCanaux, const PositionBloc&) noexcept;
     void finirTick (std::int64_t tick) noexcept;
-    void lireAutresPistes (std::int64_t tick, bool tickPrecis, float quantite, int maPriorite,
-                           rogus::Reductions& visee, int& roleLePlusFort) const noexcept;
+    // Ce que les pistes plus prioritaires demandent à celle-ci pour un tick.
+    struct Demandes
+    {
+        rogus::Reductions bandes {};      // démasquage : réduction par bande (dB, <= 0)
+        int roleBandes = -1;              // rôle de la piste qui demande le plus
+        float creux = 0.0f;               // creux de volume (dB, <= 0)
+        int roleCreux = -1;
+    };
+
+    Demandes lireAutresPistes (std::int64_t tick, bool tickPrecis, float quantite, int maPriorite,
+                               bool avecCreux) const noexcept;
     void calculerDemasquage (bool actif, const PositionBloc&, int nbEch) noexcept;
 
     std::atomic<float>* paramRole = nullptr;
@@ -142,6 +158,7 @@ private:
     std::atomic<float>* paramReactivite = nullptr;
     std::atomic<float>* paramCompression = nullptr;
     std::atomic<float>* paramCompQuantite = nullptr;
+    std::atomic<float>* paramCreux = nullptr;
 
     // --- Partagé entre fils ---
 
@@ -172,6 +189,8 @@ private:
     std::atomic<int> roleDominant { -1 };
     std::atomic<bool> synchroHoteVue { false };
     std::atomic<float> reductionCompVue { 0.0f }, rattrapageVu { 0.0f };
+    std::atomic<float> creuxVu { 0.0f };
+    std::atomic<int> roleCreux { -1 };
 
     // --- Réservé au fil audio ---
 
@@ -216,6 +235,12 @@ private:
     rogus::BancBandes filtresDyn;
     std::array<std::array<std::array<double, 2>, rogus::nbBandes>, 2> memoireDyn {};
     bool dynNeutre = true;
+
+    // Creux de volume. `creuxTick` avance tick par tick, comme le démasquage ;
+    // `creuxLisse` le rejoint échantillon par échantillon, pour que le volume
+    // glisse au lieu de sauter d'un bloc à l'autre (un saut de gain s'entend).
+    float creuxTick = 0.0f;                                  // dB, <= 0
+    double creuxLisse = 0.0;                                 // dB, <= 0, valeur appliquée
 
     // Écoute : tampon circulaire des derniers échantillons, puis FFT.
     juce::dsp::FFT fft { rogus::ordreFft };

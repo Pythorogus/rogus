@@ -60,6 +60,7 @@ private:
     rogus::Potard potardDemQuantite { "Quantité", 60 };
     rogus::Potard potardReactivite { "Réactivité", 60 };
     juce::ComboBox choixPriorite;
+    juce::ToggleButton boutonCreux { "Creux de volume" };      // la piste entière baisse (« sidechain »)
     juce::Label etatDemasquage;
 
     // Les « attaches » relient un contrôle à un paramètre dans les deux sens :
@@ -70,7 +71,7 @@ private:
     using AttacheBouton  = juce::AudioProcessorValueTreeState::ButtonAttachment;
     using AttacheCurseur = juce::AudioProcessorValueTreeState::SliderAttachment;
     std::unique_ptr<AttacheChoix> attacheRole, attacheSource, attacheSon, attachePriorite;
-    std::unique_ptr<AttacheBouton> attacheActif, attacheCompression, attacheDemasquage;
+    std::unique_ptr<AttacheBouton> attacheActif, attacheCompression, attacheDemasquage, attacheCreux;
     std::unique_ptr<AttacheCurseur> attacheQuantite, attacheCompQuantite, attacheDemQuantite, attacheReactivite;
 
     // Mise en page (calculée dans resized, dessinée dans paint).

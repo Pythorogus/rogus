@@ -9,7 +9,7 @@ service externe.
 Trois plugins sont prévus, séparés (chacun son `.vst3`, sans mémoire partagée) :
 
 - **`Rogus`** (piste) : EQ fixe par rôle, démasquage dynamique entre pistes,
-  compression par rôle. Étapes 1 à 4 faites.
+  compression par rôle, creux de volume (« sidechain », v0.5). Étapes 1 à 4 faites.
 - **`Rogus Master`** (master) : masterise dans FL Studio — il écoute le morceau,
   règle le gain vers une cible de volume perçu (LUFS) et limite la crête réelle.
   Écrit, compilé, testé et installé le 14 novembre 2026 ; pas encore écouté.
@@ -80,7 +80,7 @@ Constat sur cette même capture (guitare électrique claire, rôle Rythmique, qu
 | `tester.ps1` | compile et lance les tests des deux plugins |
 | `installer.ps1` | copie les deux `.vst3` dans `C:\Program Files\Common Files\VST3` (emplacement choisi par Pierre) ; se relance avec les droits administrateur, Windows demande confirmation |
 
-Fenêtres (v0.4, 14 novembre 2026) : habillage « Console » repris de la maquette A choisie par Pierre (canevas « Rogus — propositions UI »), avec le logo n°2 (deux ondes qui se chevauchent). Fond graphite, un seul accent de couleur, potards pour les quantités, interrupteurs, trois cartes dans l'ordre du trajet du son (correction fixe, compression, démasquage). `Rogus` fait 700 × 768, `Rogus Master` 620 × 576 (maquette réduite à environ 85 % pour tenir dans FL sur un écran 1080p).
+Fenêtres (v0.4, 14 novembre 2026 ; la v0.5 ajoute l'interrupteur « Creux de volume » dans la carte Démasquage) : habillage « Console » repris de la maquette A choisie par Pierre (canevas « Rogus — propositions UI »), avec le logo n°2 (deux ondes qui se chevauchent). Fond graphite, un seul accent de couleur, potards pour les quantités, interrupteurs, trois cartes dans l'ordre du trajet du son (correction fixe, compression, démasquage). `Rogus` fait 700 × 768, `Rogus Master` 620 × 576 (maquette réduite à environ 85 % pour tenir dans FL sur un écran 1080p).
 
 - **Couleur et nom de la piste** : si l'hôte les donne (`updateTrackProperties`, côté VST3 le « channel context »), la couleur de la piste remplace l'ambre et son nom s'affiche en étiquette à côté du titre. **Valeurs par défaut exigées par Pierre** (le plugin peut servir ailleurs que dans FL) : pas de nom reçu = pas d'étiquette ; pas de couleur reçue, couleur grise (piste sans couleur choisie) ou transparente = ambre. Une couleur trop sombre est éclaircie (`accentPour` dans `Habillage.cpp`). **Pas encore vérifié que FL Studio envoie ces informations.**
 - **Polices embarquées** : environ 1,8 Mo de plus par `.vst3` (6,5 → 8,3 Mo). Si une police ne se charge pas, repli sur Segoe UI / Consolas.
@@ -122,6 +122,19 @@ Fonctionnement de la compression (étape 4) :
 6. **Place dans le trajet** : correction fixe → compression → démasquage. La place cédée aux autres pistes n'est donc pas « rattrapée » par le gain rendu.
 7. **Écoute obligatoire** : sans histogramme (piste jamais écoutée, ou projet d'avant l'étape 4), la compression ne fait rien, même cochée. Une nouvelle écoute la rend possible ; l'interrupteur reste à cocher, et il est **à l'arrêt par défaut**.
 8. **Paramètres ajoutés** (à la suite) : `compressionActive` (non), `compressionQuantite` (50 %). La mesure gagne les champs `histo0` à `histo47`, facultatifs : pas de changement de `versionEtat`. Raison du défaut à l'arrêt : la compression est surtout utile sur la voix et la basse ; sur une guitare déjà compressée par l'ampli ou sur des drums dont on veut garder les transitoires, elle peut faire plus de mal que de bien.
+
+Fonctionnement du creux de volume (v0.5, 14 novembre 2026) :
+
+Écrit, compilé, testé hors FL Studio et installé ; **pas encore écouté**. Raison : le démasquage ne baisse que quelques fréquences, et faiblement à un cran d'écart (kick 5, basse 4 : 1,5 dB au plus, dans la seule bande de 100 Hz). Vérifié sur des exports de « Can of Monster » : avec la basse en priorité 1 et le démasquage à 100 %, la basse ne perdait que 1,3 à 1,5 dB entre 80 et 200 Hz, et elle cédait alors à toutes les autres pistes. Pierre voulait un vrai « sidechain » sans multiplier les exceptions par couple de pistes : c'est une règle générique, qui se coche piste par piste.
+
+1. **Ce que c'est** : la piste ENTIÈRE baisse (un gain, pas un filtre) pendant qu'une piste strictement plus prioritaire joue dans sa propre zone, puis remonte. Paramètre `creuxVolume` (interrupteur « Creux de volume » dans la carte Démasquage), **à l'arrêt par défaut**.
+2. **Qui déclenche** : toute piste strictement plus prioritaire qui participe au démasquage. **L'écart de priorité ne dose pas la baisse** (contrairement au démasquage) : un seul cran suffit. La priorité sert donc à choisir qui déclenche : une basse en 4 ne creuse que pour le kick et la voix (5).
+3. **Profondeur** : 6 dB au plus (`profondeurCreuxMaxDb`) × quantité du démasquage × activité de l'autre piste dans sa zone (`activiteDansZone` : la bande la plus active de la zone ; un kick ne compte que par sa bande de 100 Hz). Plusieurs demandes : la plus forte, pas la somme. À 50 % (défaut) : 3 dB.
+4. **Vitesse** : installation en 10 ms ; retour selon la réactivité, de 250 ms (0 %) à 60 ms (100 %). Le gain appliqué rejoint sa cible en 5 ms, échantillon par échantillon, pour ne pas faire de marche (testé).
+5. **Place dans le trajet** : tout au bout, après les filtres du démasquage ; il s'ajoute à eux. Couper le démasquage coupe aussi le creux.
+6. **Même résultat à l'écoute et à l'export** : il avance par ticks comme le démasquage (testé : identique à l'échantillon près pour l'ordre inversé et les blocs de 256 contre 512).
+7. **Limite connue : le retard.** L'activité est mesurée par ticks de 1024 échantillons et lue un tick plus tard : le creux arrive 25 à 50 ms après le début du coup. Il dégage le corps du kick, pas son tout premier claquement. Faire mieux demanderait d'anticiper (latence) ou de mesurer plus finement.
+8. Profondeur et temps sont des valeurs de départ, à régler à l'oreille. Coché sur une piste peu prioritaire, il la baisse dès que n'importe quelle piste plus prioritaire joue : il est fait pour quelques pistes (la basse sous le kick), pas pour toutes.
 
 Réglages par rôle (table `tableRoles` de `Correction.cpp`) : la basse est validée à l'oreille ; les autres restent à affiner.
 
@@ -202,7 +215,7 @@ Règles du code audio : pas d'allocation mémoire ni d'attente sur un verrou dan
 
 **Règle de compatibilité (exigence de Pierre) : une nouvelle version doit toujours reprendre les réglages enregistrés par la précédente.** Charger la nouvelle version dans un projet existant ne doit rien faire perdre.
 
-- Ne jamais supprimer ni renommer un identifiant de paramètre (`role`, `source`, `son`, `correctionActive`, `quantite`, `priorite`, `demasquageActif`, `demasquageQuantite`, `reactivite`, `compressionActive`, `compressionQuantite` pour `Rogus` ; `cible`, `gain` pour `Rogus Master`), ni les codes des plugins (`Rogs` / `Rgs1` pour `Rogus`, `Rgs3` pour `Rogus Master` ; `Rgs2` réservé à `Rogus Prise`).
+- Ne jamais supprimer ni renommer un identifiant de paramètre (`role`, `source`, `son`, `correctionActive`, `quantite`, `priorite`, `demasquageActif`, `demasquageQuantite`, `reactivite`, `compressionActive`, `compressionQuantite`, `creuxVolume` pour `Rogus` ; `cible`, `gain` pour `Rogus Master`), ni les codes des plugins (`Rogs` / `Rgs1` pour `Rogus`, `Rgs3` pour `Rogus Master` ; `Rgs2` réservé à `Rogus Prise`).
 - Les listes de choix ne s'enregistrent que par leur numéro : on n'en réordonne ni n'en retire jamais une entrée ; les nouvelles s'ajoutent **à la fin**.
 - Si un changement incompatible est vraiment nécessaire : augmenter `versionEtat` dans `PluginProcessor.cpp`, écrire la conversion depuis la version précédente dans `migrerEtat`, et ajouter un test qui fabrique un faux ancien état (voir `etatEtape2` dans `Tests/tests.cpp`) et vérifie ce qui est repris. Les tests doivent échouer si on retire la conversion.
 - Formats déjà connus : étape 1 et étape 2 (sans numéro de version, converties à l'ouverture), version 3 actuelle (trois menus). L'ancien rôle de l'étape 2 (6 choix) est converti en rôle + source.
@@ -216,7 +229,7 @@ Abandonné pour l'instant : profils de style et détection de genre pour le mast
 
 - Code, commentaires et messages utilisateur en français.
 - Commentaires pédagogiques : expliquer le pourquoi des étapes audio.
-- **Numéro de version** : commun aux deux plugins, à deux chiffres (`0.X`), fixé par la ligne `project(RogusPlugin VERSION 0.X.0 ...)` de `plugin/CMakeLists.txt` (le troisième chiffre reste à 0 : CMake et l'hôte en veulent trois). Il est affiché en petit, en clair, en haut à droite de chaque fenêtre, dans l'en-tête (« v0.4 »), pour vérifier que FL Studio a bien chargé la dernière version. **Claude gère le versionnage lui-même (décision de Pierre, 14 novembre 2026) : à chaque modification du code d'un plugin, augmenter X de 1 sans le demander, avant de compiler et d'installer, mettre à jour « Version actuelle » ci-après, et annoncer le nouveau numéro à Pierre dans le compte rendu.** Une modification qui ne touche que la documentation ou les tests ne change pas le numéro. Version actuelle : 0.4 (14 novembre 2026, fenêtres refaites : habillage « Console », logo, couleur et nom de piste).
+- **Numéro de version** : commun aux deux plugins, à deux chiffres (`0.X`), fixé par la ligne `project(RogusPlugin VERSION 0.X.0 ...)` de `plugin/CMakeLists.txt` (le troisième chiffre reste à 0 : CMake et l'hôte en veulent trois). Il est affiché en petit, en clair, en haut à droite de chaque fenêtre, dans l'en-tête (« v0.4 »), pour vérifier que FL Studio a bien chargé la dernière version. **Claude gère le versionnage lui-même (décision de Pierre, 14 novembre 2026) : à chaque modification du code d'un plugin, augmenter X de 1 sans le demander, avant de compiler et d'installer, mettre à jour « Version actuelle » ci-après, et annoncer le nouveau numéro à Pierre dans le compte rendu.** Une modification qui ne touche que la documentation ou les tests ne change pas le numéro. Version actuelle : 0.5 (14 novembre 2026, creux de volume : la piste entière baisse quand une piste plus prioritaire joue).
 - Après une modification : tester, compiler, puis installer soi-même avec `installer.ps1` (FL Studio fermé), sans le demander à Pierre.
 - **Claude gère git lui-même (décision de Pierre, 14 novembre 2026)** : après chaque modification terminée (testée, compilée, installée), commiter sur `main` avec un message en français qui dit ce qui change et pourquoi, puis pousser vers `origin` (GitHub, `Pythorogus/rogus`), sans le demander. Cela ne couvre pas les opérations qui réécrivent ou détruisent l'historique (`push --force`, `reset --hard`, suppression de branche) : celles-là se demandent toujours.
 - Dépôt git (branche `main`), avec un distant `origin` sur GitHub. Le dossier `plugin/build/` et les fichiers audio ne sont pas suivis.

@@ -252,12 +252,13 @@ namespace
     };
 
     Duo jouerDuo (const juce::MemoryBlock& etatVoix, const juce::MemoryBlock& etatLead,
-                  bool voixDabord, int bloc, float choixPrioriteLead, bool avecTete = true)
+                  bool voixDabord, int bloc, float choixPrioriteLead, bool avecTete = true, bool creuxLead = false)
     {
         RogusProcessor voix, lead;
         voix.setStateInformation (etatVoix.getData(), (int) etatVoix.getSize());
         lead.setStateInformation (etatLead.getData(), (int) etatLead.getSize());
         choisir (lead, IdParam::priorite, choixPrioriteLead);
+        choisir (lead, IdParam::creuxVolume, creuxLead ? 1.0f : 0.0f);
 
         for (auto* p : { &voix, &lead })
         {
@@ -965,6 +966,79 @@ int main()
         const auto sansRepere = jouerDuo (etatVoixAncien, etatLead, true, 512, 1.0f);
         verifier (std::abs (sansRepere.pendantVoix) < 0.05f, "voix ecoutee avant l'etape 3 : le lead ne baisse pas ("
                                                               + juce::String (sansRepere.pendantVoix, 2) + " dB)");
+
+        // --- Creux de volume (v0.5) ---
+        std::cout << "Creux de volume" << std::endl;
+
+        rogus::Equilibre zoneKick = rogus::poidsZone (rogus::role (4)), joue {};
+        joue[0] = 0.5f;      // le kick joue a moitie dans sa bande de 100 Hz...
+        joue[5] = 1.0f;      // ... et claque dans l'aigu, hors de sa zone
+        verifier (rogus::activiteDansZone (zoneKick, joue) == 0.5f,
+                  "activite dans la zone : seule la zone du role compte (le claquement aigu du kick est ignore)");
+        verifier (rogus::creuxVolume (1.0f, 5, 4, 1.0f) == -6.0f && rogus::creuxVolume (1.0f, 5, 4, 0.5f) == -3.0f
+                  && rogus::creuxVolume (0.0f, 5, 4, 1.0f) == 0.0f && rogus::creuxVolume (1.0f, 4, 4, 1.0f) == 0.0f
+                  && rogus::creuxVolume (1.0f, 3, 4, 1.0f) == 0.0f,
+                  "creux : -6 dB des un cran d'ecart, dose par la quantite, nul a priorite egale ou sans activite");
+
+        // Lead en priorite auto (4) sous la voix (5) : un seul cran d'ecart. Le
+        // demasquage seul ne baisse presque rien (« leger ») ; avec le creux, la
+        // piste entiere baisse franchement, puis revient quand la voix se tait.
+        const auto creuse = jouerDuo (etatVoix, etatLead, true, 512, 0.0f, true, true);
+        verifier (creuse.pendantVoix < leger.pendantVoix - 4.5f && creuse.pendantVoix > -9.0f && creuse.sansVoix > -0.3f,
+                  "creux coche, un cran d'ecart : le lead baisse de " + juce::String (-creuse.pendantVoix, 1)
+                  + " dB quand la voix chante (" + juce::String (-leger.pendantVoix, 1) + " sans le creux), revient ensuite ("
+                  + juce::String (creuse.sansVoix, 1) + " dB)");
+        verifier (creuse.ecartVoix == 0.0f, "creux : la voix, plus prioritaire, n'est jamais modifiee");
+
+        // Decoche (valeur par defaut) : rien ne change par rapport a avant.
+        verifier (jouerDuo (etatVoix, etatLead, true, 512, 0.0f, true, false).sortieLead == leger.sortieLead,
+                  "creux decoche : sortie identique a celle du demasquage seul");
+
+        // A priorite egale, pas de creux non plus.
+        const auto creuxEgal = jouerDuo (etatVoix, etatLead, true, 512, 5.0f, true, true);
+        verifier (std::abs (creuxEgal.pendantVoix) < 0.05f, "creux a priorite egale : aucune baisse ("
+                                                             + juce::String (creuxEgal.pendantVoix, 2) + " dB)");
+
+        // Meme resultat a l'ecoute et a l'export, comme pour le demasquage.
+        verifier (jouerDuo (etatVoix, etatLead, false, 512, 0.0f, true, true).sortieLead == creuse.sortieLead,
+                  "creux, ordre de traitement inverse : sortie identique a l'echantillon pres");
+        verifier (jouerDuo (etatVoix, etatLead, true, 256, 0.0f, true, true).sortieLead == creuse.sortieLead,
+                  "creux, blocs de 256 au lieu de 512 : sortie identique a l'echantillon pres");
+
+        const auto creuxImpair = jouerDuo (etatVoix, etatLead, true, 480, 0.0f, true, true);
+        verifier (std::abs (creuxImpair.pendantVoix - creuse.pendantVoix) < 0.1f,
+                  "creux, blocs de 480 : meme baisse a 0,1 dB pres (" + juce::String (creuxImpair.pendantVoix, 2)
+                  + " contre " + juce::String (creuse.pendantVoix, 2) + " dB)");
+
+        const auto creuxSansTete = jouerDuo (etatVoix, etatLead, true, 512, 0.0f, false, true);
+        verifier (creuxSansTete.pendantVoix < leger.pendantVoix - 4.5f && creuxSansTete.sansVoix > -0.3f,
+                  "creux sans position de l'hote : meme comportement (" + juce::String (creuxSansTete.pendantVoix, 1) + " / "
+                  + juce::String (creuxSansTete.sansVoix, 1) + " dB)");
+
+        // Le volume doit glisser, pas sauter. Le creux n'est qu'un gain pose
+        // apres le demasquage : en divisant la sortie par celle du demasquage
+        // seul, on retrouve ce gain, et on regarde s'il fait des marches d'un
+        // echantillon au suivant (une marche de gain s'entend comme un clic).
+        float sautMax = 0.0f, gainMin = 1.0f, gainAvant = -1.0f;
+        for (size_t n = 0; n < creuse.sortieLead.size(); ++n)
+        {
+            if (std::abs (leger.sortieLead[n]) < 0.05f)
+            {
+                gainAvant = -1.0f;      // trop pres de zero : la division ne veut rien dire
+                continue;
+            }
+
+            const float gain = creuse.sortieLead[n] / leger.sortieLead[n];
+            gainMin = juce::jmin (gainMin, gain);
+
+            if (gainAvant >= 0.0f)
+                sautMax = juce::jmax (sautMax, std::abs (gain - gainAvant));
+
+            gainAvant = gain;
+        }
+        verifier (sautMax < 0.005f && gainMin > 0.49f && gainMin < 0.56f,
+                  "creux : le volume glisse sans marche (saut max " + juce::String (sautMax, 4)
+                  + " par echantillon), jusqu'a un gain de " + juce::String (gainMin, 2));
     }
 
     std::cout << "Anciens projets" << std::endl;
@@ -1047,7 +1121,8 @@ int main()
 
                 if (id == IdParam::priorite || id == IdParam::demasquageActif
                     || id == IdParam::demasquageQuantite || id == IdParam::reactivite
-                    || id == IdParam::compressionActive || id == IdParam::compressionQuantite)
+                    || id == IdParam::compressionActive || id == IdParam::compressionQuantite
+                    || id == IdParam::creuxVolume)
                     etat.removeChild (i, nullptr);
             }
 
@@ -1075,6 +1150,8 @@ int main()
                       && q.parametres.getRawParameterValue (IdParam::compressionActive)->load() < 0.5f
                       && std::abs (q.parametres.getRawParameterValue (IdParam::compressionQuantite)->load() - 50.0f) < 0.01f,
                       "projet d'avant l'etape 4 : compression a l'arret par defaut, inactive sans reecoute");
+            verifier (q.parametres.getRawParameterValue (IdParam::creuxVolume)->load() < 0.5f && ! q.lireCreuxActif(),
+                      "projet d'avant la v0.5 : creux de volume a l'arret par defaut");
         }
 
         // L'histogramme des niveaux survit lui aussi à un enregistrement.
