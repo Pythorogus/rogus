@@ -3,7 +3,7 @@
 
 cmake_minimum_required(VERSION 3.22)
 
-project(RogusPlugin VERSION 0.2.0 LANGUAGES C CXX)
+project(RogusPlugin VERSION 0.3.0 LANGUAGES C CXX)
 
 # Numéro de version commun aux deux plugins, affiché en bas à droite de leur
 # fenêtre (« v0.2 »). Deux chiffres suffisent : on augmente le second à chaque

@@ -475,11 +475,45 @@ int main()
             plate.niveaux[(size_t) i] = -20.0f;
 
         const auto clair   = rogus::calculerCorrection (lead, rogus::source (0), rogus::son (0), plate);
-        const auto sombre  = rogus::calculerCorrection (lead, rogus::source (0), rogus::son (2), plate);
+        const auto sombre = rogus::calculerCorrection (lead, rogus::source (0), rogus::son (2), plate);
         const auto brillant = rogus::calculerCorrection (lead, rogus::source (0), rogus::son (3), plate);
         verifier (sombre.gains[6] < clair.gains[6] - 0.5f && brillant.gains[6] > clair.gains[6] + 0.5f,
                   "son : sombre baisse et brillant monte la bande des aigus (" + juce::String (sombre.gains[6], 1) + " / "
                   + juce::String (clair.gains[6], 1) + " / " + juce::String (brillant.gains[6], 1) + " dB)");
+
+        // Sons ajoutes en fin de liste (Chaud, Mordant, Serre) : chacun deplace
+        // la cible dans sa zone, par rapport au son Clair (neutre). On part d'une
+        // piste deja a l'equilibre du role (correction nulle en Clair) : avec la
+        // mesure plate, le lead est deja en butee a +4 dB dans les mediums et un
+        // decalage de plus ne se verrait pas.
+        rogus::Mesure equilibree;
+        equilibree.valide = true;
+        for (int i = 0; i < rogus::nbBandes; ++i)
+            equilibree.niveaux[(size_t) i] = lead.cible[(size_t) i] - 20.0f;
+
+        const auto repere  = rogus::calculerCorrection (lead, rogus::source (0), rogus::son (0), equilibree);
+        const auto chaud   = rogus::calculerCorrection (lead, rogus::source (0), rogus::son (4), equilibree);
+        const auto mordant = rogus::calculerCorrection (lead, rogus::source (0), rogus::son (5), equilibree);
+        const auto serre   = rogus::calculerCorrection (lead, rogus::source (0), rogus::son (6), equilibree);
+        verifier (chaud.gains[1] > repere.gains[1] + 0.5f && chaud.gains[2] > repere.gains[2] + 0.5f
+                  && chaud.gains[6] < repere.gains[6] - 0.5f,
+                  "son chaud : plus de bas-medium, aigu retenu (" + juce::String (chaud.gains[2] - repere.gains[2], 1)
+                  + " dB a 400 Hz, " + juce::String (chaud.gains[6] - repere.gains[6], 1) + " dB dans l'aigu)");
+        verifier (mordant.gains[4] > repere.gains[4] + 0.5f && mordant.gains[5] > repere.gains[5] + 0.5f,
+                  "son mordant : plus de medium-presence (" + juce::String (mordant.gains[4] - repere.gains[4], 1)
+                  + " dB a 1,6 kHz, " + juce::String (mordant.gains[5] - repere.gains[5], 1) + " dB a 3,2 kHz)");
+        verifier (serre.gains[1] < repere.gains[1] - 0.5f && serre.gains[2] < repere.gains[2] - 0.5f,
+                  "son serre : moins de bas-medium (" + juce::String (serre.gains[1] - repere.gains[1], 1)
+                  + " dB a 200 Hz, " + juce::String (serre.gains[2] - repere.gains[2], 1) + " dB a 400 Hz)");
+
+        // Compatibilite : le projet n'enregistre que le numero du son. Les quatre
+        // premiers gardent leur place, les nouveaux sont a la fin.
+        {
+            const auto noms = rogus::nomsSons();
+            verifier (noms.size() == 7 && noms[0] == "Clair" && noms[2] == "Sombre" && noms[3] == "Brillant"
+                      && noms[4] == "Chaud" && noms[5] == "Mordant",
+                      "liste des sons : les anciens gardent leur numero, les nouveaux sont a la fin");
+        }
 
         const auto acoustique = rogus::calculerCorrection (lead, rogus::source (1), rogus::son (0), plate);
         verifier (acoustique.gains != clair.gains, "source : guitare acoustique donne une autre correction que l'electrique");
@@ -604,11 +638,15 @@ int main()
         // (un cas plus dur que la musique, ou l'energie est plus etalee), puis
         // on compare le niveau de sortie a celui d'entree. Source Synthe : sans
         // recherche de resonances, qui ajouterait des encoches etroites.
-        struct Cas { const char* nom; int role; std::vector<float> centres; };
+        struct Cas { const char* nom; int role; std::vector<float> centres; int son = 0; };
         const Cas cas[] = {
             { "lead, bandes 200 Hz + 3,2 kHz",              0, { 200.0f, 3200.0f } },
             { "rythmique, bandes 100 + 400 + 1600 Hz",      1, { 100.0f, 400.0f, 1600.0f } },
             { "voix, bandes 400 Hz + 1,6 kHz + 6,4 kHz",    7, { 400.0f, 1600.0f, 6400.0f } },
+            // Les sons ajoutes deplacent la cible : le volume doit tenir aussi.
+            { "lead chaud, bandes 200 Hz + 3,2 kHz",        0, { 200.0f, 3200.0f }, 4 },
+            { "lead mordant, bandes 200 Hz + 3,2 kHz",      0, { 200.0f, 3200.0f }, 5 },
+            { "rythmique serre, bandes 100 + 400 + 1600 Hz", 1, { 100.0f, 400.0f, 1600.0f }, 6 },
         };
 
         for (const auto& c : cas)
@@ -617,6 +655,7 @@ int main()
             preparer (p);
             choisir (p, IdParam::role, (float) c.role);
             choisir (p, IdParam::source, 5.0f);        // Synthe
+            choisir (p, IdParam::son, (float) c.son);
             choisir (p, IdParam::quantite, 100.0f);
             choisir (p, IdParam::compressionActive, 0.0f);     // on isole la correction fixe
 

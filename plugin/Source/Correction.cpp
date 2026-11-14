@@ -77,6 +77,14 @@ namespace
         { "Saturé",   {  0.0f, -3.0f, -3.0f,  0.0f,  0.0f, -3.0f, -3.0f } },
         { "Sombre",   {  0.0f,  0.0f,  0.0f,  0.0f, -2.0f, -4.0f, -6.0f } },
         { "Brillant", {  0.0f,  0.0f,  0.0f,  0.0f,  1.0f,  2.0f,  3.0f } },
+        // Les trois suivants sont des nuances : décalages petits (3 dB au plus).
+        // Ajoutés À LA FIN : le projet n'enregistre que le numéro du son.
+        // Chaud : du corps dans le grave et le bas-médium (200-400 Hz), aigu un peu retenu.
+        { "Chaud",    {  1.0f,  2.0f,  2.0f,  0.0f,  0.0f, -1.0f, -2.0f } },
+        // Mordant : le médium-présence (1 à 3 kHz), là où l'attaque des notes perce.
+        { "Mordant",  {  0.0f,  0.0f,  0.0f,  0.0f,  2.5f,  2.5f,  0.0f } },
+        // Serré : moins de « boue » entre 150 et 400 Hz, le reste inchangé.
+        { "Serré",    {  0.0f, -2.5f, -2.5f,  0.0f,  0.0f,  0.0f,  0.0f } },
     }};
 
     // Limites de la correction large. On coupe plus volontiers qu'on ne monte :

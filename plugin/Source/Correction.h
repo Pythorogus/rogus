@@ -81,7 +81,7 @@ struct Son
     Equilibre decalage;                     // ajustement de la cible, en dB
 };
 
-constexpr int nbRoles = 9, nbSources = 6, nbSons = 4;
+constexpr int nbRoles = 9, nbSources = 6, nbSons = 7;
 const Role& role (int index) noexcept;
 const Source& source (int index) noexcept;
 const Son& son (int index) noexcept;
