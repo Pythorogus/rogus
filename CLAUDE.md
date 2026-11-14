@@ -76,6 +76,7 @@ Constat sur cette même capture (guitare électrique claire, rôle Rythmique, qu
 | `SourceMaster/Limiteur.*` | limiteur de crête réelle avec anticipation |
 | `Tests/tests.cpp` | tests du moteur de piste hors FL Studio |
 | `TestsMaster/tests.cpp` | tests de Rogus Master hors FL Studio |
+| `Outils/essai.cpp` | essai sur de vrais fichiers WAV hors FL (cible CMake `RogusEssai`) : un kick et une basse passent dans deux instances du moteur ; il écrit la basse sans démasquage, avec démasquage seul, puis avec le creux de volume. Usage : `RogusEssai.exe <kick.wav> <basse.wav> <dossier> [priorité basse]` |
 | `compiler.ps1` | configure et compile les deux plugins en Release |
 | `tester.ps1` | compile et lance les tests des deux plugins |
 | `installer.ps1` | copie les deux `.vst3` dans `C:\Program Files\Common Files\VST3` (emplacement choisi par Pierre) ; se relance avec les droits administrateur, Windows demande confirmation |
@@ -134,7 +135,8 @@ Fonctionnement du creux de volume (v0.5, 14 novembre 2026) :
 5. **Place dans le trajet** : tout au bout, après les filtres du démasquage ; il s'ajoute à eux. Couper le démasquage coupe aussi le creux.
 6. **Même résultat à l'écoute et à l'export** : il avance par ticks comme le démasquage (testé : identique à l'échantillon près pour l'ordre inversé et les blocs de 256 contre 512).
 7. **Limite connue : le retard.** L'activité est mesurée par ticks de 1024 échantillons et lue un tick plus tard : le creux arrive 25 à 50 ms après le début du coup. Il dégage le corps du kick, pas son tout premier claquement. Faire mieux demanderait d'anticiper (latence) ou de mesurer plus finement.
-8. Profondeur et temps sont des valeurs de départ, à régler à l'oreille. Coché sur une piste peu prioritaire, il la baisse dès que n'importe quelle piste plus prioritaire joue : il est fait pour quelques pistes (la basse sous le kick), pas pour toutes.
+8. **Mesuré dans FL Studio** (14 novembre 2026, « Can of Monster », basse en priorité Auto, creux coché, quantité et réactivité à 100 %) : sur les 12 coups de kick d'un extrait de 16 s, le mix complet perd 5,3 dB entre 70 et 140 Hz et 2,2 dB entre 140 et 280 Hz pendant le coup, rien au-dessus (les autres instruments y dominent), et 0,25 dB en volume global. **Attention pour les prochaines mesures** : les exports que Pierre envoie sont le mix complet de l'extrait, pas la piste seule, même quand le nom du fichier parle de la basse ; pour mesurer une piste seule, demander un export en solo ou passer par `RogusEssai`.
+9. Profondeur et temps sont des valeurs de départ, à régler à l'oreille. Coché sur une piste peu prioritaire, il la baisse dès que n'importe quelle piste plus prioritaire joue : il est fait pour quelques pistes (la basse sous le kick), pas pour toutes.
 
 Réglages par rôle (table `tableRoles` de `Correction.cpp`) : la basse est validée à l'oreille ; les autres restent à affiner.
 

@@ -83,6 +83,21 @@ target_link_libraries(RogusTests
         juce::juce_recommended_warning_flags
 )
 
+# Essai sur de vrais fichiers WAV, hors FL Studio (voir Outils/essai.cpp) :
+# un kick et une basse passent dans deux instances du moteur, comme dans l'hôte.
+juce_add_console_app(RogusEssai PRODUCT_NAME "RogusEssai")
+target_sources(RogusEssai PRIVATE Outils/essai.cpp ${SOURCES_ROGUS})
+target_compile_definitions(RogusEssai PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 ROGUS_VERSION="${ROGUS_VERSION}")
+target_compile_options(RogusEssai PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
+target_link_libraries(RogusEssai
+    PRIVATE
+        RogusPolices
+        juce::juce_audio_utils
+        juce::juce_dsp
+        juce::juce_recommended_config_flags
+        juce::juce_recommended_warning_flags
+)
+
 target_compile_definitions(Rogus PUBLIC
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
