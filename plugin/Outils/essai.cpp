@@ -6,7 +6,9 @@
 //
 //   RogusEssai.exe <kick.wav> <basse.wav> <dossier de sortie> [priorité de la basse, 0 = Auto]
 
+#include <algorithm>
 #include <iostream>
+#include <limits>
 #include <juce_audio_formats/juce_audio_formats.h>
 #include "../Source/PluginProcessor.h"
 
@@ -89,13 +91,376 @@ namespace
     }
 }
 
+// --- Mode « morceau » ---------------------------------------------------------
+// Toutes les pistes d'un dossier passent dans le plugin complet, chacune dans
+// sa propre instance, comme dans un projet FL. Le rôle et la source de chaque
+// piste sont devinés d'après le nom du fichier.
+//
+//   RogusEssai.exe --morceau <dossier des pistes> <dossier de sortie>
+
+namespace
+{
+    struct Piste
+    {
+        juce::String nom;
+        juce::AudioBuffer<float> son;
+        std::unique_ptr<RogusProcessor> moteur;
+        int role = 0, source = 0;
+        bool ecoutee = false;
+    };
+
+    // Numéros des menus : rôles 0 Lead, 1 Rythmique, 2 Arpège, 3 Basse, 4 Kick,
+    // 5 Snare, 6 Hits, 7 Voix, 8 Nappe ; sources 0 guitare électrique,
+    // 1 guitare acoustique, 2 voix, 3 basse, 4 batterie, 5 synthé.
+    bool deviner (const juce::String& nom, int& role, int& source)
+    {
+        struct Regle { const char* debut; int role, source; };
+
+        for (const Regle r : { Regle { "kick", 4, 4 }, Regle { "snare", 5, 4 }, Regle { "hit", 6, 4 },
+                               Regle { "bass", 3, 3 }, Regle { "guitare_ryth", 1, 0 }, Regle { "ryth", 1, 0 },
+                               Regle { "lead", 0, 0 }, Regle { "synth", 0, 5 }, Regle { "arp", 2, 5 },
+                               Regle { "voix", 7, 2 }, Regle { "nappe", 8, 5 }, Regle { "pad", 8, 5 } })
+        {
+            if (nom.startsWithIgnoreCase (r.debut))
+            {
+                role = r.role;
+                source = r.source;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    double energie (const juce::AudioBuffer<float>& son, int nbEch)
+    {
+        double somme = 0.0;
+
+        for (int canal = 0; canal < 2; ++canal)
+            for (int n = 0; n < nbEch; ++n)
+                somme += (double) son.getSample (canal, n) * (double) son.getSample (canal, n);
+
+        return somme;
+    }
+
+    float enDb (double rapport)  { return (float) (10.0 * std::log10 (rapport + 1.0e-30)); }
+
+    juce::String db (float valeur, int decimales = 1)
+    {
+        return (valeur >= 0.0f ? "+" : "") + juce::String (valeur, decimales);
+    }
+
+    // Ce qu'une passe a produit pour une piste.
+    struct Resultat
+    {
+        juce::AudioBuffer<float> sortie;
+        rogus::Reductions cedeMax {};      // plus forte réduction du démasquage, par bande
+        int roleDominant = -1;
+        float compMax = 0.0f;              // plus forte baisse du compresseur
+        bool fini = true;
+    };
+
+    // Joue tout le morceau une fois : chaque bloc passe dans toutes les pistes,
+    // dans l'ordre demandé, avec la même position de lecture.
+    std::vector<Resultat> jouerMorceau (std::vector<Piste>& pistes, int nbEch, double fs, int bloc, bool ordreInverse)
+    {
+        TeteLecture tete;
+        std::vector<Resultat> resultats (pistes.size());
+
+        for (size_t i = 0; i < pistes.size(); ++i)
+        {
+            pistes[i].moteur->setRateAndBufferSizeDetails (fs, bloc);
+            pistes[i].moteur->prepareToPlay (fs, bloc);
+            pistes[i].moteur->setPlayHead (&tete);
+            resultats[i].sortie.setSize (2, nbEch);
+        }
+
+        juce::AudioBuffer<float> tampon (2, bloc);
+        juce::MidiBuffer midi;
+
+        for (int debut = 0; debut + bloc <= nbEch; debut += bloc)
+        {
+            tete.position = debut;
+
+            for (size_t k = 0; k < pistes.size(); ++k)
+            {
+                const size_t i = ordreInverse ? pistes.size() - 1 - k : k;
+                auto& moteur = *pistes[i].moteur;
+                auto& r = resultats[i];
+
+                for (int canal = 0; canal < 2; ++canal)
+                    tampon.copyFrom (canal, 0, pistes[i].son, canal, debut, bloc);
+
+                moteur.processBlock (tampon, midi);
+
+                for (int canal = 0; canal < 2; ++canal)
+                {
+                    r.sortie.copyFrom (canal, debut, tampon, canal, 0, bloc);
+
+                    for (int n = 0; n < bloc; ++n)
+                        r.fini = r.fini && std::isfinite (tampon.getSample (canal, n));
+                }
+
+                const auto reductions = moteur.lireReductions();
+
+                for (size_t b = 0; b < (size_t) rogus::nbBandes; ++b)
+                {
+                    if (reductions[b] < r.cedeMax[b])
+                    {
+                        const bool laPlusForte = std::all_of (r.cedeMax.begin(), r.cedeMax.end(),
+                                                              [&] (float v) { return reductions[b] < v; });
+                        r.cedeMax[b] = reductions[b];
+
+                        if (laPlusForte && moteur.lireRoleDominant() >= 0)
+                            r.roleDominant = moteur.lireRoleDominant();
+                    }
+                }
+
+                r.compMax = juce::jmin (r.compMax, moteur.lireReductionCompression());
+            }
+        }
+
+        for (auto& p : pistes)
+            p.moteur->setPlayHead (nullptr);
+
+        return resultats;
+    }
+
+    juce::AudioBuffer<float> melanger (const std::vector<Resultat>& resultats, int nbEch)
+    {
+        juce::AudioBuffer<float> mix (2, nbEch);
+        mix.clear();
+
+        for (const auto& r : resultats)
+            for (int canal = 0; canal < 2; ++canal)
+                mix.addFrom (canal, 0, r.sortie, canal, 0, nbEch);
+
+        return mix;
+    }
+
+    float ecartMax (const juce::AudioBuffer<float>& a, const juce::AudioBuffer<float>& b, int nbEch)
+    {
+        float ecart = 0.0f;
+
+        for (int canal = 0; canal < 2; ++canal)
+            for (int n = 0; n < nbEch; ++n)
+                ecart = juce::jmax (ecart, std::abs (a.getSample (canal, n) - b.getSample (canal, n)));
+
+        return ecart;
+    }
+
+    int essayerMorceau (const juce::File& dossierPistes, const juce::File& dossierSortie)
+    {
+        std::vector<Piste> pistes;
+        double fs = 0.0;
+        int nbEch = std::numeric_limits<int>::max();
+
+        for (const auto& fichier : dossierPistes.findChildFiles (juce::File::findFiles, false, "*.wav"))
+        {
+            Piste p;
+            p.nom = fichier.getFileNameWithoutExtension();
+            double fsPiste = 0.0;
+
+            if (! deviner (p.nom, p.role, p.source))
+            {
+                std::cout << "  (piste ignoree, role inconnu : " << p.nom << ")" << std::endl;
+                continue;
+            }
+
+            if (! lire (fichier, p.son, fsPiste) || (fs != 0.0 && fsPiste != fs))
+            {
+                std::cout << "Fichier illisible : " << p.nom << std::endl;
+                return 1;
+            }
+
+            fs = fsPiste;
+            nbEch = juce::jmin (nbEch, p.son.getNumSamples());
+            pistes.push_back (std::move (p));
+        }
+
+        if (pistes.empty())
+        {
+            std::cout << "Aucune piste reconnue dans ce dossier." << std::endl;
+            return 1;
+        }
+
+        nbEch = nbEch / 1024 * 1024;      // un nombre entier de blocs, quelle que soit leur taille
+        dossierSortie.createDirectory();
+
+        // --- Écoute de chaque piste, réglages d'usine ---
+        std::cout << "ECOUTE (reglages d'usine)" << std::endl;
+
+        for (auto& p : pistes)
+        {
+            p.moteur = std::make_unique<RogusProcessor>();
+            p.moteur->setRateAndBufferSizeDetails (fs, tailleBloc);
+            p.moteur->prepareToPlay (fs, tailleBloc);
+            choisir (*p.moteur, IdParam::role, (float) p.role);
+            choisir (*p.moteur, IdParam::source, (float) p.source);
+            p.ecoutee = ecouter (*p.moteur, p.son);
+
+            if (p.moteur->ecouteEnCours())
+            {
+                // Le plugin attend encore du son : la piste est trop faible pour lui.
+                juce::AudioBuffer<float> tampon (2, tailleBloc);
+                juce::MidiBuffer midi;
+                p.moteur->arreterEcoute();
+                tampon.clear();
+                p.moteur->processBlock (tampon, midi);
+                p.moteur->mettreAJour();
+            }
+
+            const auto m = p.moteur->lireMesure();
+            const auto c = p.moteur->lireCorrection();
+            const auto dosee = rogus::doser (c, 0.6f);
+            juce::String ligne = "  " + p.nom.paddedRight (' ', 20) + rogus::role (p.role).nom + " / " + rogus::source (p.source).nom;
+
+            if (! m.valide)
+            {
+                std::cout << ligne << " : PAS D'ECOUTE (son trop faible ou trop court)" << std::endl;
+                continue;
+            }
+
+            ligne << " : coupe-bas " << juce::roundToInt (c.coupeBasHz) << " Hz, bandes a 60 % [";
+
+            for (float g : dosee.gains)
+                ligne << " " << db (g);
+
+            ligne << " ] dB, compensation " << db (dosee.compensationDb) << " dB";
+
+            for (int i = 0; i < c.nbRes; ++i)
+                ligne << ", resonance " << juce::roundToInt (c.resHz[(size_t) i]) << " Hz (" << db (dosee.resGain[(size_t) i]) << " dB)";
+
+            ligne << (m.refValide ? "" : ", SANS repere de demasquage") << (m.histoValide ? "" : ", SANS histogramme");
+            std::cout << ligne << std::endl;
+        }
+
+        auto regler = [&] (bool correction, bool demasquage)
+        {
+            for (auto& p : pistes)
+            {
+                choisir (*p.moteur, IdParam::correctionActive, correction ? 1.0f : 0.0f);
+                choisir (*p.moteur, IdParam::demasquageActif, demasquage ? 1.0f : 0.0f);
+            }
+        };
+
+        std::vector<double> energieEntree;
+
+        for (auto& p : pistes)
+            energieEntree.push_back (energie (p.son, nbEch));
+
+        auto decrire = [&] (const char* titre, const std::vector<Resultat>& resultats, bool detail)
+        {
+            std::cout << titre << std::endl;
+
+            for (size_t i = 0; i < pistes.size(); ++i)
+            {
+                const auto& r = resultats[i];
+                juce::String ligne = "  " + pistes[i].nom.paddedRight (' ', 20) + "volume "
+                                   + db (enDb (energie (r.sortie, nbEch) / energieEntree[i]), 2) + " dB, crete "
+                                   + juce::String (juce::Decibels::gainToDecibels (r.sortie.getMagnitude (0, nbEch)), 1) + " dBFS"
+                                   + (r.fini ? "" : "  VALEUR INVALIDE");
+
+                if (detail)
+                {
+                    size_t bande = 0;
+
+                    for (size_t b = 1; b < r.cedeMax.size(); ++b)
+                        if (r.cedeMax[b] < r.cedeMax[bande])
+                            bande = b;
+
+                    if (r.cedeMax[bande] < -0.05f)
+                        ligne << ", cede jusqu'a " << juce::String (-r.cedeMax[bande], 1) << " dB vers "
+                              << juce::roundToInt (rogus::frequencesBandes[bande]) << " Hz"
+                              << (r.roleDominant >= 0 ? " a : " + juce::String (rogus::role (r.roleDominant).nom) : juce::String());
+                    else
+                        ligne << ", ne cede rien";
+
+                    if (r.compMax < -0.05f)
+                        ligne << ", compresse jusqu'a " << juce::String (-r.compMax, 1) << " dB";
+                }
+
+                std::cout << ligne << std::endl;
+            }
+
+            juce::AudioBuffer<float> entree (2, nbEch);
+            entree.clear();
+
+            for (auto& p : pistes)
+                for (int canal = 0; canal < 2; ++canal)
+                    entree.addFrom (canal, 0, p.son, canal, 0, nbEch);
+
+            const auto mix = melanger (resultats, nbEch);
+            std::cout << "  => mix complet : volume " << db (enDb (energie (mix, nbEch) / energie (entree, nbEch)), 2)
+                      << " dB, crete " << juce::String (juce::Decibels::gainToDecibels (mix.getMagnitude (0, nbEch)), 1) << " dBFS" << std::endl;
+            return mix;
+        };
+
+        // --- 1. Tout coupé : le son doit traverser le plugin intact ---
+        regler (false, false);
+        const auto coupe = jouerMorceau (pistes, nbEch, fs, tailleBloc, false);
+        float ecartCoupe = 0.0f;
+
+        for (size_t i = 0; i < pistes.size(); ++i)
+            ecartCoupe = juce::jmax (ecartCoupe, ecartMax (coupe[i].sortie, pistes[i].son, nbEch));
+
+        std::cout << "1. TOUT COUPE : ecart max entre sortie et entree = " << ecartCoupe
+                  << (ecartCoupe == 0.0f ? "  (identique)" : "  (DIFFERENT)") << std::endl;
+        ecrire (dossierSortie.getChildFile ("mix_sans_rogus.wav"), melanger (coupe, nbEch), fs);
+
+        // --- 2. Correction fixe seule ---
+        regler (true, false);
+        decrire ("2. CORRECTION FIXE SEULE (60 %)", jouerMorceau (pistes, nbEch, fs, tailleBloc, false), false);
+
+        // --- 3. Réglages d'usine : correction fixe + démasquage ---
+        regler (true, true);
+        const auto usine = jouerMorceau (pistes, nbEch, fs, tailleBloc, false);
+        ecrire (dossierSortie.getChildFile ("mix_avec_rogus.wav"),
+                decrire ("3. REGLAGES D'USINE (correction 60 %, demasquage 50 %)", usine, true), fs);
+
+        // --- 4. Même résultat quels que soient les blocs et l'ordre des pistes ---
+        const auto petits = jouerMorceau (pistes, nbEch, fs, 256, false);
+        const auto inverse = jouerMorceau (pistes, nbEch, fs, tailleBloc, true);
+        float ecartBlocs = 0.0f, ecartOrdre = 0.0f;
+
+        for (size_t i = 0; i < pistes.size(); ++i)
+        {
+            ecartBlocs = juce::jmax (ecartBlocs, ecartMax (petits[i].sortie, usine[i].sortie, nbEch));
+            ecartOrdre = juce::jmax (ecartOrdre, ecartMax (inverse[i].sortie, usine[i].sortie, nbEch));
+        }
+
+        std::cout << "4. ECOUTE = EXPORT : blocs de 256 au lieu de 512, ecart max " << ecartBlocs
+                  << " ; ordre des pistes inverse, ecart max " << ecartOrdre << std::endl;
+
+        // --- 5. Compression cochée partout (50 %), en plus ---
+        for (auto& p : pistes)
+            choisir (*p.moteur, IdParam::compressionActive, 1.0f);
+
+        decrire ("5. AVEC LA COMPRESSION COCHEE PARTOUT (50 %)", jouerMorceau (pistes, nbEch, fs, tailleBloc, false), true);
+
+        for (auto& p : pistes)
+            choisir (*p.moteur, IdParam::compressionActive, 0.0f);
+
+        // --- 6. Creux de volume coché partout, en plus des réglages d'usine ---
+        for (auto& p : pistes)
+            choisir (*p.moteur, IdParam::creuxVolume, 1.0f);
+
+        decrire ("6. AVEC LE CREUX DE VOLUME COCHE PARTOUT (demasquage 50 %)", jouerMorceau (pistes, nbEch, fs, tailleBloc, false), false);
+        return 0;
+    }
+}
+
 int main (int argc, char* argv[])
 {
     juce::ScopedJuceInitialiser_GUI initialisation;
 
+    if (argc >= 4 && juce::String (argv[1]) == "--morceau")
+        return essayerMorceau (juce::File (juce::String::fromUTF8 (argv[2])), juce::File (juce::String::fromUTF8 (argv[3])));
+
     if (argc < 4)
     {
-        std::cout << "Usage : RogusEssai <kick.wav> <basse.wav> <dossier de sortie> [priorite basse]" << std::endl;
+        std::cout << "Usage : RogusEssai <kick.wav> <basse.wav> <dossier de sortie> [priorite basse]" << std::endl
+                  << "        RogusEssai --morceau <dossier des pistes> <dossier de sortie>" << std::endl;
         return 1;
     }
 

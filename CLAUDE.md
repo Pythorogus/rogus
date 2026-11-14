@@ -76,7 +76,7 @@ Constat sur cette même capture (guitare électrique claire, rôle Rythmique, qu
 | `SourceMaster/Limiteur.*` | limiteur de crête réelle avec anticipation |
 | `Tests/tests.cpp` | tests du moteur de piste hors FL Studio |
 | `TestsMaster/tests.cpp` | tests de Rogus Master hors FL Studio |
-| `Outils/essai.cpp` | essai sur de vrais fichiers WAV hors FL (cible CMake `RogusEssai`) : un kick et une basse passent dans deux instances du moteur ; il écrit la basse sans démasquage, avec démasquage seul, puis avec le creux de volume. Usage : `RogusEssai.exe <kick.wav> <basse.wav> <dossier> [priorité basse]` |
+| `Outils/essai.cpp` | essai sur de vrais fichiers WAV hors FL (cible CMake `RogusEssai`) : un kick et une basse passent dans deux instances du moteur ; il écrit la basse sans démasquage, avec démasquage seul, puis avec le creux de volume. Usage : `RogusEssai.exe <kick.wav> <basse.wav> <dossier> [priorité basse]`. Mode morceau : `RogusEssai.exe --morceau <dossier des pistes> <dossier de sortie>` passe toutes les pistes d'un dossier dans le plugin complet (rôle et source devinés d'après le nom du fichier : kick, snare, hit, bass, ryth, lead, synth, arp, voix, nappe, pad) et affiche, piste par piste, la correction trouvée, le volume, ce qui est cédé, la compression, puis vérifie l'identité écoute / export |
 | `compiler.ps1` | configure et compile les deux plugins en Release |
 | `tester.ps1` | compile et lance les tests des deux plugins |
 | `installer.ps1` | copie les deux `.vst3` dans `C:\Program Files\Common Files\VST3` (emplacement choisi par Pierre) ; se relance avec les droits administrateur, Windows demande confirmation |
@@ -210,6 +210,8 @@ Outils nécessaires (installés sur ce poste avec winget) : Visual Studio Build 
 ```
 
 Les tests vérifient des propriétés mesurables (deux suites : réponse des filtres, bornes de la correction, neutralité à 0 %, déroulement d'une écoute, sauvegarde, courbe et volume du compresseur ; mesure LUFS, crête réelle, plafond du limiteur, calage du gain). Ils ne disent rien de la qualité sonore. Les relancer après toute modification du moteur.
+
+**Pistes d'essai de Pierre** : `C:\Users\pierr\Documents\Image-Line\FL Studio\Projects\Compos\Can of Monster\Test_Rogus` contient 16 s de « Can of Monster » en six pistes séparées sans aucun Rogus (basse, guitare rythmique, hits, kick, snare, synthé), exportées après les faders (donc plus bas que ce que le plugin reçoit dans FL). Elles servent à vérifier le plugin sur du vrai son avec `RogusEssai --morceau`. Vérification du 14 novembre 2026 (v0.5, réglages d'usine) : tout coupé, la sortie est identique à l'entrée ; la correction fixe seule change le volume de chaque piste de 0,41 dB au plus et celui du mix de 0,05 dB ; avec le démasquage, le mix perd 0,34 dB ; sortie identique à l'échantillon près avec des blocs de 256 au lieu de 512 et avec l'ordre des pistes inversé ; aucune valeur invalide. Deux constats : la piste `hits1` (crête à −41 dBFS) est sous le seuil de silence de l'écoute (−50 dBFS en moyenne), donc jamais écoutée ; et avec la compression cochée, le volume rendu dépasse un peu (basse +0,6 dB, synthé +0,45 dB).
 
 Fermer FL Studio avant d'installer (un plugin chargé est verrouillé). Ce dossier est l'emplacement VST3 standard : dans FL Studio, il suffit de relancer la recherche (Options > Manage plugins > Find installed plugins).
 
