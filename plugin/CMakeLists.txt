@@ -3,7 +3,13 @@
 
 cmake_minimum_required(VERSION 3.22)
 
-project(RogusPlugin VERSION 0.1.0 LANGUAGES C CXX)
+project(RogusPlugin VERSION 0.2.0 LANGUAGES C CXX)
+
+# Numéro de version commun aux deux plugins, affiché en bas à droite de leur
+# fenêtre (« v0.2 »). Deux chiffres suffisent : on augmente le second à chaque
+# modification installée, en changeant la ligne project(...) ci-dessus. Il sert
+# à vérifier d'un coup d'œil que FL Studio a bien chargé la dernière version.
+set(ROGUS_VERSION "${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}")
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -51,7 +57,7 @@ target_sources(Rogus PRIVATE ${SOURCES_ROGUS})
 # signaux de synthèse (voir tester.ps1).
 juce_add_console_app(RogusTests PRODUCT_NAME "RogusTests")
 target_sources(RogusTests PRIVATE Tests/tests.cpp ${SOURCES_ROGUS})
-target_compile_definitions(RogusTests PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
+target_compile_definitions(RogusTests PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 ROGUS_VERSION="${ROGUS_VERSION}")
 target_compile_options(RogusTests PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
 target_link_libraries(RogusTests
     PRIVATE
@@ -65,6 +71,7 @@ target_compile_definitions(Rogus PUBLIC
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
     JUCE_VST3_CAN_REPLACE_VST2=0
+    ROGUS_VERSION="${ROGUS_VERSION}"
 )
 
 # Les sources sont en UTF-8 (commentaires et textes en français). Sans cette
@@ -113,6 +120,7 @@ target_compile_definitions(RogusMaster PUBLIC
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
     JUCE_VST3_CAN_REPLACE_VST2=0
+    ROGUS_VERSION="${ROGUS_VERSION}"
 )
 
 target_compile_options(RogusMaster PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
@@ -131,7 +139,7 @@ target_link_libraries(RogusMaster
 juce_add_console_app(RogusMasterTests PRODUCT_NAME "RogusMasterTests")
 target_sources(RogusMasterTests PRIVATE TestsMaster/tests.cpp ${SOURCES_MASTER})
 target_include_directories(RogusMasterTests PRIVATE Source SourceMaster)
-target_compile_definitions(RogusMasterTests PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
+target_compile_definitions(RogusMasterTests PRIVATE JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 ROGUS_VERSION="${ROGUS_VERSION}")
 target_compile_options(RogusMasterTests PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/utf-8>)
 target_link_libraries(RogusMasterTests
     PRIVATE

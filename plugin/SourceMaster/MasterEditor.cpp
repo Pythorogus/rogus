@@ -186,6 +186,13 @@ void RogusMasterEditor::paint (juce::Graphics& g)
 
     g.setColour (couleurCadre);
     g.fillRoundedRectangle (cadreLufs.toFloat(), 8.0f);
+
+    // Numéro de version, discret, dans la marge du bas à droite : il permet de
+    // vérifier que l'hôte a bien chargé la dernière version installée.
+    g.setColour (couleurTexte.withAlpha (0.45f));
+    g.setFont (juce::FontOptions (10.0f));
+    g.drawText ("v" ROGUS_VERSION, getLocalBounds().removeFromBottom (16).reduced (8, 0),
+                juce::Justification::centredRight);
 }
 
 void RogusMasterEditor::resized()
