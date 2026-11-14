@@ -13,9 +13,14 @@ void Limiteur::prepare (double frequenceEch, int nbCanaux, int tailleBlocMax,
     canaux = juce::jlimit (1, 2, nbCanaux);
 
     const double fs4 = fs * 4.0;
-    coefAttaque = std::exp (-1.0 / (fs4 * 0.001));       // 1 ms
-    coefRelache = std::exp (-1.0 / (fs4 * 0.150));       // 150 ms
-    coefGain    = std::exp (-1.0 / (fs4 * 0.050));       // 50 ms
+    // Lissage à un pôle : à chaque échantillon, la valeur parcourt la fraction
+    // « coef » du chemin qui la sépare de sa cible. Pour une constante de temps
+    // T, cette fraction vaut 1 - exp(-1 / (fs * T)) : elle est petite (un pas
+    // fin à chaque échantillon). Avec exp(...) seul, proche de 1, la valeur
+    // rejoindrait sa cible en un échantillon et rien ne serait lissé.
+    coefAttaque = 1.0 - std::exp (-1.0 / (fs4 * 0.001));       // 1 ms
+    coefRelache = 1.0 - std::exp (-1.0 / (fs4 * 0.150));       // 150 ms
+    coefGain    = 1.0 - std::exp (-1.0 / (fs4 * 0.050));       // 50 ms
 
     retard = juce::jmax (1, (int) std::round (fs4 * anticipationMs / 1000.0));
     tailleFenetre = retard + 1;

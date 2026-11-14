@@ -202,6 +202,119 @@ int main()
                   + juce::String (rapport, 3) + ")");
     }
 
+    std::cout << "Lissages du limiteur" << std::endl;
+    {
+        // Ces tests échouent si les lissages redeviennent instantanés (c'était
+        // le défaut de la première version : coefficient exp(...) au lieu de
+        // 1 - exp(...)).
+        juce::AudioBuffer<float> tampon (2, tailleBloc);
+        float reduction = 0.0f;
+
+        auto creteBloc = [&tampon]
+        {
+            return tampon.getMagnitude (0, 0, tailleBloc);
+        };
+
+        // --- Relâchement : après un passage fort, le gain revient en douceur --
+        {
+            rogus::Limiteur limiteur;
+            limiteur.prepare (fs, 2, tailleBloc);
+
+            Sinus fort (1000.0, 1.0f);
+            for (int b = 0; b < (int) (0.5 * fs / tailleBloc); ++b)
+            {
+                fort.remplir (tampon);
+                limiteur.traiter (tampon, 2, 11.0f, -1.0f, reduction);
+            }
+
+            const float reductionFort = reduction;      // environ -12 dB
+
+            // Passage faible : 3e bloc = 21 à 32 ms après la fin du passage fort.
+            Sinus faible (1000.0, 0.01f);
+            float reductionPeuApres = 0.0f;
+
+            for (int b = 0; b < (int) (1.5 * fs / tailleBloc); ++b)
+            {
+                faible.remplir (tampon);
+                limiteur.traiter (tampon, 2, 11.0f, -1.0f, reduction);
+
+                if (b == 2)
+                    reductionPeuApres = reduction;
+            }
+
+            verifier (reductionFort < -10.0f,
+                      "passage fort : reduction d'environ 12 dB ("
+                      + juce::String (reductionFort, 1) + " dB)");
+            verifier (reductionPeuApres < -4.0f,
+                      "relachement : 30 ms apres, le gain n'est pas encore revenu ("
+                      + juce::String (reductionPeuApres, 1) + " dB)");
+            verifier (reduction > -0.1f,
+                      "relachement : 1,5 s apres, le gain est revenu ("
+                      + juce::String (reduction, 2) + " dB)");
+        }
+
+        // --- Gain de calage : un changement ne saute pas d'un coup ------------
+        {
+            rogus::Limiteur limiteur;
+            limiteur.prepare (fs, 2, tailleBloc);
+
+            Sinus sinus (1000.0, 0.03f);
+            for (int b = 0; b < 20; ++b)
+            {
+                sinus.remplir (tampon);
+                limiteur.traiter (tampon, 2, 0.0f, -1.0f, reduction);
+            }
+
+            // +12 dB : le premier bloc (11 ms) doit être loin du niveau final.
+            sinus.remplir (tampon);
+            limiteur.traiter (tampon, 2, 12.0f, -1.0f, reduction);
+            const float creteDebut = creteBloc();
+
+            for (int b = 0; b < (int) (1.0 * fs / tailleBloc); ++b)
+            {
+                sinus.remplir (tampon);
+                limiteur.traiter (tampon, 2, 12.0f, -1.0f, reduction);
+            }
+
+            const float creteFin = creteBloc();
+            const float attendu = 0.03f * (float) std::pow (10.0, 12.0 / 20.0);
+
+            verifier (creteDebut < 0.6f * creteFin,
+                      "gain : un changement de +12 dB est lisse (premier bloc a "
+                      + juce::String (juce::roundToInt (100.0f * creteDebut / creteFin)) + " % du niveau final)");
+            verifier (std::abs (creteFin / attendu - 1.0f) < 0.03f,
+                      "gain : le niveau final est atteint apres 1 s");
+        }
+
+        // --- Attaque : une entrée brutale très forte ne perce pas le plafond --
+        {
+            rogus::Limiteur limiteur;
+            rogus::MesureLoudness mesure;
+            limiteur.prepare (fs, 2, tailleBloc);
+            mesure.prepare (fs, 2, tailleBloc);
+
+            // Salves de 100 ms à 0 dBFS poussées de +12 dB, séparées par du
+            // silence : le limiteur doit descendre de 13 dB en 5 ms à chaque fois.
+            // Réglage réel du plugin : visée -1,5 dBTP pour sortir sous -1.
+            Sinus salve (1000.0, 1.0f);
+
+            for (int b = 0; b < (int) (2.0 * fs / tailleBloc); ++b)
+            {
+                if ((b / 9) % 2 == 0)
+                    salve.remplir (tampon);
+                else
+                    tampon.clear();
+
+                limiteur.traiter (tampon, 2, 12.0f, -1.5f, reduction);
+                mesure.traiter (tampon, 2);
+            }
+
+            verifier (mesure.creteReelleDb() <= -1.0f,
+                      "attaque : des salves a +12 dB restent sous -1 dBTP (obtenu "
+                      + juce::String (mesure.creteReelleDb(), 2) + " dBTP)");
+        }
+    }
+
     std::cout << "Calage du gain" << std::endl;
     {
         RogusMasterProcessor p;
