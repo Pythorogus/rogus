@@ -262,6 +262,7 @@ namespace
 
         for (auto* p : { &voix, &lead })
         {
+            choisir (*p, IdParam::demasquageActif, 1.0f);   // a l'arret par defaut (v0.6)
             choisir (*p, IdParam::demasquageQuantite, 100.0f);
             choisir (*p, IdParam::reactivite, 100.0f);
             p->setRateAndBufferSizeDetails (fs, bloc);
@@ -1143,7 +1144,7 @@ int main()
             verifier (q.lireRole() == 7 && q.lireMesure().valide && ! q.lireMesure().refValide
                       && std::abs (q.parametres.getRawParameterValue (IdParam::quantite)->load() - 35.0f) < 0.01f,
                       "projet d'avant l'etape 3 : role, quantite et ecoute gardes (repere de niveau absent)");
-            verifier (q.lirePriorite() == 5 && q.lireDemasquageActif()
+            verifier (q.lirePriorite() == 5 && ! q.lireDemasquageActif()
                       && std::abs (q.parametres.getRawParameterValue (IdParam::demasquageQuantite)->load() - 50.0f) < 0.01f,
                       "projet d'avant l'etape 3 : nouveaux reglages a leur valeur par defaut (priorite du role)");
             verifier (! q.lireMesure().histoValide && ! q.lireCorrection().compression.valide

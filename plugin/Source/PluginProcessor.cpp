@@ -162,8 +162,10 @@ juce::AudioProcessorValueTreeState::ParameterLayout RogusProcessor::creerParamet
         juce::ParameterID { IdParam::priorite, 1 }, rogus::fr ("Priorité"),
         juce::StringArray { "Auto", "1", "2", "3", "4", "5" }, 0));
 
+    // Démasquage à l'ARRÊT par défaut (v0.6) : il n'a pas convaincu à l'écoute.
+    // Un projet enregistré garde sa valeur ; seul un réglage absent prend ce défaut.
     disposition.add (std::make_unique<juce::AudioParameterBool> (
-        juce::ParameterID { IdParam::demasquageActif, 1 }, rogus::fr ("Démasquage"), true));
+        juce::ParameterID { IdParam::demasquageActif, 1 }, rogus::fr ("Démasquage"), false));
 
     disposition.add (std::make_unique<juce::AudioParameterFloat> (
         juce::ParameterID { IdParam::demasquageQuantite, 1 }, rogus::fr ("Quantité du démasquage"),
